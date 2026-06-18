@@ -4,10 +4,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import DesignerCanvas from './components/DesignerCanvas';
 import LeftPanel from './components/LeftPanel';
 import PropertiesPanel from './components/PropertiesPanel';
+import SelectedFurnitureToolbar from './components/SelectedFurnitureToolbar';
 import TopBar from './components/TopBar';
 import { DESIGN_TEMPLATES, cloneTemplateDesign, createEmptyDesign } from './data/templates';
-import type { BackgroundImage, DesignDocument, DesignTemplate, FurnitureDefinition, Point, Selection, ToolMode } from './types';
+import type {
+  BackgroundImage,
+  DesignDocument,
+  DesignTemplate,
+  FurnitureDefinition,
+  FurnitureInstance,
+  Point,
+  Selection,
+  ToolMode
+} from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
+import { createId } from './utils/geometry';
 
 const HISTORY_LIMIT = 80;
 
@@ -84,6 +95,19 @@ export default function App() {
   const [statusText, setStatusText] = useState('本地方案');
   const [leftPanelVisible, setLeftPanelVisible] = useState(true);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
+  const [furnitureClipboard, setFurnitureClipboard] = useState<FurnitureInstance | null>(null);
+
+  const selectedFurniture =
+    selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) ?? null : null;
+
+  const selectedFurnitureToolbarStyle = selectedFurniture
+    ? {
+        left: stagePosition.x + selectedFurniture.x * zoom,
+        top:
+          stagePosition.y +
+          (selectedFurniture.y - ((selectedFurniture.depth / 100) * design.canvas.scalePxPerMeter) / 2) * zoom
+      }
+    : undefined;
 
   const refreshSavedDesigns = useCallback(async () => {
     const designs = await listDesigns();
@@ -206,9 +230,117 @@ export default function App() {
     }, null);
   }, [commitChange, selection]);
 
+  const copySelectedFurniture = useCallback(() => {
+    if (!selectedFurniture) {
+      return;
+    }
+
+    setFurnitureClipboard(structuredClone(selectedFurniture));
+    setStatusText(`已复制 ${selectedFurniture.name}`);
+  }, [selectedFurniture]);
+
+  const pasteFurniture = useCallback(() => {
+    if (!furnitureClipboard) {
+      return;
+    }
+
+    const instanceId = createId('furniture');
+    const offset = design.canvas.gridSize;
+    const nextFurniture: FurnitureInstance = {
+      ...structuredClone(furnitureClipboard),
+      instanceId,
+      x: furnitureClipboard.x + offset,
+      y: furnitureClipboard.y + offset
+    };
+
+    commitChange(
+      (current) => ({
+        ...current,
+        furniture: [...current.furniture, nextFurniture]
+      }),
+      { type: 'furniture', id: instanceId }
+    );
+    setFurnitureClipboard(nextFurniture);
+    setStatusText(`已粘贴 ${nextFurniture.name}`);
+  }, [commitChange, design.canvas.gridSize, furnitureClipboard]);
+
+  const rotateSelectedFurniture = useCallback(() => {
+    if (!selectedFurniture) {
+      return;
+    }
+
+    commitChange((current) => ({
+      ...current,
+      furniture: current.furniture.map((item) =>
+        item.instanceId === selectedFurniture.instanceId ? { ...item, rotation: (item.rotation + 90) % 360 } : item
+      )
+    }));
+  }, [commitChange, selectedFurniture]);
+
+  const nudgeSelectedFurniture = useCallback(
+    (deltaX: number, deltaY: number) => {
+      if (!selectedFurniture) {
+        return;
+      }
+
+      commitChange((current) => ({
+        ...current,
+        furniture: current.furniture.map((item) =>
+          item.instanceId === selectedFurniture.instanceId
+            ? {
+                ...item,
+                x: item.x + deltaX,
+                y: item.y + deltaY
+              }
+            : item
+        )
+      }));
+    },
+    [commitChange, selectedFurniture]
+  );
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) {
+        return;
+      }
+
+      if (event.ctrlKey && event.key.toLowerCase() === 'c') {
+        if (selectedFurniture) {
+          event.preventDefault();
+          copySelectedFurniture();
+        }
+        return;
+      }
+
+      if (event.ctrlKey && event.key.toLowerCase() === 'v') {
+        if (furnitureClipboard) {
+          event.preventDefault();
+          pasteFurniture();
+        }
+        return;
+      }
+
+      if (!event.ctrlKey && event.key.toLowerCase() === 'r') {
+        if (selectedFurniture) {
+          event.preventDefault();
+          rotateSelectedFurniture();
+        }
+        return;
+      }
+
+      const gridSize = design.canvas.gridSize;
+      const arrowNudgeMap: Record<string, Point> = {
+        ArrowLeft: { x: -gridSize, y: 0 },
+        ArrowRight: { x: gridSize, y: 0 },
+        ArrowUp: { x: 0, y: -gridSize },
+        ArrowDown: { x: 0, y: gridSize }
+      };
+      const nudge = arrowNudgeMap[event.key];
+
+      if (nudge && selectedFurniture) {
+        event.preventDefault();
+        nudgeSelectedFurniture(nudge.x, nudge.y);
         return;
       }
 
@@ -229,7 +361,18 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteSelection, redo, undo]);
+  }, [
+    copySelectedFurniture,
+    deleteSelection,
+    design.canvas.gridSize,
+    furnitureClipboard,
+    nudgeSelectedFurniture,
+    pasteFurniture,
+    redo,
+    rotateSelectedFurniture,
+    selectedFurniture,
+    undo
+  ]);
 
   const applyTemplate = (template: DesignTemplate) => {
     commitChange(() => cloneTemplateDesign(template), null);
@@ -394,6 +537,16 @@ export default function App() {
             onZoomChange={setZoom}
             onStagePositionChange={setStagePosition}
           />
+          {selectedFurniture && selectedFurnitureToolbarStyle && (
+            <SelectedFurnitureToolbar
+              style={selectedFurnitureToolbarStyle}
+              canPaste={Boolean(furnitureClipboard)}
+              onCopy={copySelectedFurniture}
+              onPaste={pasteFurniture}
+              onRotate={rotateSelectedFurniture}
+              onDelete={deleteSelection}
+            />
+          )}
           <div className="canvas-status">
             <span>{statusText}</span>
             <span>{modeText}</span>

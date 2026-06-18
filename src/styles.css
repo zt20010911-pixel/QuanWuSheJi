@@ -412,6 +412,42 @@ button:disabled {
   height: 100%;
 }
 
+.selection-toolbar {
+  position: absolute;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  border: 1px solid #d2dad6;
+  border-radius: 6px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(33, 43, 54, 0.16);
+  transform: translate(-50%, calc(-100% - 10px));
+}
+
+.selection-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #435066;
+}
+
+.selection-toolbar button:hover {
+  background: #e9f5f2;
+  color: #176b61;
+}
+
+.selection-toolbar button:disabled {
+  opacity: 0.35;
+}
+
 .canvas-status {
   position: absolute;
   right: 16px;
