@@ -1,4 +1,5 @@
 import type Konva from 'konva';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import DesignerCanvas from './components/DesignerCanvas';
 import LeftPanel from './components/LeftPanel';
@@ -81,6 +82,8 @@ export default function App() {
   const [history, setHistory] = useState<DesignDocument[]>([]);
   const [future, setFuture] = useState<DesignDocument[]>([]);
   const [statusText, setStatusText] = useState('本地方案');
+  const [leftPanelVisible, setLeftPanelVisible] = useState(true);
+  const [rightPanelVisible, setRightPanelVisible] = useState(true);
 
   const refreshSavedDesigns = useCallback(async () => {
     const designs = await listDesigns();
@@ -336,7 +339,15 @@ export default function App() {
         onZoomOut={() => setZoom((value) => Math.max(0.35, value - 0.1))}
       />
 
-      <div className="workspace">
+      <div
+        className={[
+          'workspace',
+          leftPanelVisible ? '' : 'is-left-collapsed',
+          rightPanelVisible ? '' : 'is-right-collapsed'
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
         <LeftPanel
           mode={mode}
           activeCategory={activeCategory}
@@ -349,6 +360,24 @@ export default function App() {
           onFurnitureDragStart={handleFurnitureDragStart}
         />
         <div className="center-pane">
+          <button
+            className="sidebar-toggle left-sidebar-toggle"
+            type="button"
+            onClick={() => setLeftPanelVisible((visible) => !visible)}
+            title={leftPanelVisible ? '隐藏左侧栏' : '显示左侧栏'}
+            aria-label={leftPanelVisible ? '隐藏左侧栏' : '显示左侧栏'}
+          >
+            {leftPanelVisible ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+          </button>
+          <button
+            className="sidebar-toggle right-sidebar-toggle"
+            type="button"
+            onClick={() => setRightPanelVisible((visible) => !visible)}
+            title={rightPanelVisible ? '隐藏右侧栏' : '显示右侧栏'}
+            aria-label={rightPanelVisible ? '隐藏右侧栏' : '显示右侧栏'}
+          >
+            {rightPanelVisible ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          </button>
           <DesignerCanvas
             design={design}
             mode={mode}
