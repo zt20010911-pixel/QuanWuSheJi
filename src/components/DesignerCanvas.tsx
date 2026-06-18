@@ -1,0 +1,993 @@
+import type Konva from 'konva';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Arc, Circle, Ellipse, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text } from 'react-konva';
+import { FURNITURE_LIBRARY } from '../data/furniture';
+import type {
+  BackgroundImage as BackgroundImageData,
+  DesignDocument,
+  FurnitureInstance,
+  Opening,
+  Point,
+  RoomLabel,
+  Selection,
+  ToolMode,
+  Wall
+} from '../types';
+import {
+  createId,
+  findNearestWall,
+  projectPointOnWall,
+  radiansToDegrees,
+  snapPoint,
+  wallAngle
+} from '../utils/geometry';
+
+type DesignerCanvasProps = {
+  design: DesignDocument;
+  mode: ToolMode;
+  selection: Selection | null;
+  stageRef: React.RefObject<Konva.Stage | null>;
+  zoom: number;
+  stagePosition: Point;
+  draggedFurnitureId: string | null;
+  onSelectionChange: (selection: Selection | null) => void;
+  onCommitChange: (updater: (current: DesignDocument) => DesignDocument, selection?: Selection | null) => void;
+  onDraftStart: () => void;
+  onDraftChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+  onDraftEnd: () => void;
+  onZoomChange: (zoom: number) => void;
+  onStagePositionChange: (position: Point) => void;
+};
+
+const MIN_ZOOM = 0.35;
+const MAX_ZOOM = 2.5;
+
+const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+
+const useHtmlImage = (src?: string) => {
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!src) {
+      setImage(null);
+      return;
+    }
+
+    const nextImage = new window.Image();
+    nextImage.onload = () => setImage(nextImage);
+    nextImage.src = src;
+  }, [src]);
+
+  return image;
+};
+
+const isPointInBackground = (point: Point, backgroundImage: BackgroundImageData) =>
+  point.x >= backgroundImage.x &&
+  point.x <= backgroundImage.x + backgroundImage.width &&
+  point.y >= backgroundImage.y &&
+  point.y <= backgroundImage.y + backgroundImage.height;
+
+export default function DesignerCanvas({
+  design,
+  mode,
+  selection,
+  stageRef,
+  zoom,
+  stagePosition,
+  draggedFurnitureId,
+  onSelectionChange,
+  onCommitChange,
+  onDraftStart,
+  onDraftChange,
+  onDraftEnd,
+  onZoomChange,
+  onStagePositionChange
+}: DesignerCanvasProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [stageSize, setStageSize] = useState({ width: 900, height: 700 });
+  const [wallStart, setWallStart] = useState<Point | null>(null);
+  const [wallPreview, setWallPreview] = useState<Point | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) {
+      return;
+    }
+
+    const observer = new ResizeObserver(([entry]) => {
+      setStageSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height
+      });
+    });
+
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  const gridLines = useMemo(() => {
+    const lines: Array<{ points: number[]; major: boolean; key: string }> = [];
+    const { width, height, gridSize } = design.canvas;
+
+    for (let x = 0; x <= width; x += gridSize) {
+      lines.push({ points: [x, 0, x, height], major: x % (gridSize * 5) === 0, key: `v-${x}` });
+    }
+
+    for (let y = 0; y <= height; y += gridSize) {
+      lines.push({ points: [0, y, width, y], major: y % (gridSize * 5) === 0, key: `h-${y}` });
+    }
+
+    return lines;
+  }, [design.canvas]);
+
+  const getPointerWorldPoint = () => {
+    const stage = stageRef.current;
+    const pointer = stage?.getPointerPosition();
+
+    if (!pointer) {
+      return null;
+    }
+
+    return {
+      x: (pointer.x - stagePosition.x) / zoom,
+      y: (pointer.y - stagePosition.y) / zoom
+    };
+  };
+
+  const getWorldPointFromClient = (clientX: number, clientY: number) => {
+    const bounds = containerRef.current?.getBoundingClientRect();
+
+    if (!bounds) {
+      return null;
+    }
+
+    return {
+      x: (clientX - bounds.left - stagePosition.x) / zoom,
+      y: (clientY - bounds.top - stagePosition.y) / zoom
+    };
+  };
+
+  const handleCanvasClick = () => {
+    const rawPoint = getPointerWorldPoint();
+
+    if (!rawPoint) {
+      return;
+    }
+
+    if (mode === 'calibrate') {
+      const backgroundImage = design.backgroundImage;
+
+      if (!backgroundImage || !backgroundImage.visible || !isPointInBackground(rawPoint, backgroundImage)) {
+        return;
+      }
+
+      onCommitChange(
+        (current) => {
+          if (!current.backgroundImage) {
+            return current;
+          }
+
+          const currentCalibration = current.backgroundImage.calibration ?? {};
+          const nextCalibration =
+            !currentCalibration.start || currentCalibration.end
+              ? { ...currentCalibration, start: rawPoint, end: undefined }
+              : { ...currentCalibration, start: currentCalibration.start, end: rawPoint };
+
+          return {
+            ...current,
+            backgroundImage: {
+              ...current.backgroundImage,
+              calibration: nextCalibration
+            }
+          };
+        },
+        null
+      );
+      return;
+    }
+
+    const point = snapPoint(rawPoint, design.canvas.gridSize);
+
+    if (mode === 'select') {
+      onSelectionChange(null);
+      return;
+    }
+
+    if (mode === 'wall') {
+      if (!wallStart) {
+        setWallStart(point);
+        setWallPreview(point);
+        return;
+      }
+
+      const length = Math.hypot(point.x - wallStart.x, point.y - wallStart.y);
+
+      if (length < design.canvas.gridSize) {
+        return;
+      }
+
+      const wallId = createId('wall');
+      onCommitChange(
+        (current) => ({
+          ...current,
+          walls: [
+            ...current.walls,
+            {
+              id: wallId,
+              start: wallStart,
+              end: point,
+              thickness: 14
+            }
+          ]
+        }),
+        { type: 'wall', id: wallId }
+      );
+      setWallStart(point);
+      setWallPreview(point);
+      return;
+    }
+
+    if (mode === 'door' || mode === 'window') {
+      const nearestWall = findNearestWall(rawPoint, design.walls);
+
+      if (!nearestWall) {
+        return;
+      }
+
+      const projectedPoint = projectPointOnWall(rawPoint, nearestWall);
+      const openingId = createId(mode);
+      const rotation = radiansToDegrees(wallAngle(nearestWall));
+
+      onCommitChange(
+        (current) => ({
+          ...current,
+          openings: [
+            ...current.openings,
+            {
+              id: openingId,
+              kind: mode,
+              wallId: nearestWall.id,
+              x: projectedPoint.x,
+              y: projectedPoint.y,
+              width: mode === 'door' ? 90 : 120,
+              rotation
+            }
+          ]
+        }),
+        { type: 'opening', id: openingId }
+      );
+    }
+  };
+
+  const addFurnitureAtPoint = (furnitureId: string, point: Point) => {
+    const definition = FURNITURE_LIBRARY.find((item) => item.id === furnitureId);
+
+    if (!definition) {
+      return;
+    }
+
+    const instanceId = createId('furniture');
+    const position = snapPoint(point, design.canvas.gridSize);
+
+    onCommitChange(
+      (current) => ({
+        ...current,
+        furniture: [
+          ...current.furniture,
+          {
+            ...definition,
+            instanceId,
+            x: position.x,
+            y: position.y,
+            rotation: 0
+          }
+        ]
+      }),
+      { type: 'furniture', id: instanceId }
+    );
+  };
+
+  return (
+    <main
+      className="canvas-shell"
+      ref={containerRef}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        event.preventDefault();
+        const furnitureId = event.dataTransfer.getData('text/plain') || draggedFurnitureId;
+        const point = getWorldPointFromClient(event.clientX, event.clientY);
+
+        if (furnitureId && point) {
+          addFurnitureAtPoint(furnitureId, point);
+        }
+      }}
+    >
+      <Stage
+        width={stageSize.width}
+        height={stageSize.height}
+        ref={stageRef}
+        draggable={mode === 'pan'}
+        x={stagePosition.x}
+        y={stagePosition.y}
+        scaleX={zoom}
+        scaleY={zoom}
+        onDragEnd={(event) => {
+          if (event.target !== event.target.getStage()) {
+            return;
+          }
+
+          onStagePositionChange({ x: event.target.x(), y: event.target.y() });
+        }}
+        onWheel={(event) => {
+          event.evt.preventDefault();
+          const stage = stageRef.current;
+          const pointer = stage?.getPointerPosition();
+
+          if (!pointer) {
+            return;
+          }
+
+          const factor = event.evt.deltaY > 0 ? 0.92 : 1.08;
+          const nextZoom = clampZoom(zoom * factor);
+          const mousePoint = {
+            x: (pointer.x - stagePosition.x) / zoom,
+            y: (pointer.y - stagePosition.y) / zoom
+          };
+
+          onZoomChange(nextZoom);
+          onStagePositionChange({
+            x: pointer.x - mousePoint.x * nextZoom,
+            y: pointer.y - mousePoint.y * nextZoom
+          });
+        }}
+        onMouseMove={() => {
+          if (mode !== 'wall' || !wallStart) {
+            return;
+          }
+
+          const point = getPointerWorldPoint();
+
+          if (point) {
+            setWallPreview(snapPoint(point, design.canvas.gridSize));
+          }
+        }}
+        onMouseDown={(event) => {
+          const targetName = event.target.name();
+          const clickedEmptyArea =
+            event.target === event.target.getStage() || targetName === 'canvas-bg' || targetName === 'floorplan-bg';
+
+          if (clickedEmptyArea) {
+            handleCanvasClick();
+          }
+        }}
+      >
+        <Layer>
+          <Rect
+            name="canvas-bg"
+            width={design.canvas.width}
+            height={design.canvas.height}
+            fill="#f8faf6"
+            stroke="#cbd5d1"
+            strokeWidth={1}
+          />
+          <BackgroundImageShape
+            backgroundImage={design.backgroundImage}
+            mode={mode}
+            onSelect={() => onSelectionChange(null)}
+            onDraftStart={onDraftStart}
+            onDraftEnd={onDraftEnd}
+            onDraftChange={onDraftChange}
+          />
+          {gridLines.map((line) => (
+            <Line
+              key={line.key}
+              points={line.points}
+              stroke={line.major ? '#d6ded9' : '#edf1ee'}
+              strokeWidth={line.major ? 1 : 0.7}
+              listening={false}
+            />
+          ))}
+          {design.backgroundImage?.visible && <CalibrationGuide backgroundImage={design.backgroundImage} />}
+        </Layer>
+
+        <Layer>
+          {design.rooms.map((room) => (
+            <RoomLabelShape
+              key={room.id}
+              room={room}
+              mode={mode}
+              selected={selection?.type === 'room' && selection.id === room.id}
+              onSelect={() => onSelectionChange({ type: 'room', id: room.id })}
+              onDraftStart={onDraftStart}
+              onDraftEnd={onDraftEnd}
+              onDraftChange={onDraftChange}
+            />
+          ))}
+
+          {design.walls.map((wall) => (
+            <WallShape
+              key={wall.id}
+              design={design}
+              wall={wall}
+              mode={mode}
+              selected={selection?.type === 'wall' && selection.id === wall.id}
+              onSelect={() => onSelectionChange({ type: 'wall', id: wall.id })}
+              onDraftStart={onDraftStart}
+              onDraftEnd={onDraftEnd}
+              onDraftChange={onDraftChange}
+            />
+          ))}
+
+          {wallStart && wallPreview && mode === 'wall' && (
+            <Line
+              points={[wallStart.x, wallStart.y, wallPreview.x, wallPreview.y]}
+              stroke="#2f80ed"
+              strokeWidth={10}
+              dash={[14, 10]}
+              lineCap="round"
+              listening={false}
+            />
+          )}
+
+          {design.openings.map((opening) => (
+            <OpeningShape
+              key={opening.id}
+              design={design}
+              opening={opening}
+              mode={mode}
+              selected={selection?.type === 'opening' && selection.id === opening.id}
+              onSelect={() => onSelectionChange({ type: 'opening', id: opening.id })}
+              onDraftStart={onDraftStart}
+              onDraftEnd={onDraftEnd}
+              onDraftChange={onDraftChange}
+            />
+          ))}
+
+          {design.furniture.map((item) => (
+            <FurnitureShape
+              key={item.instanceId}
+              design={design}
+              furniture={item}
+              mode={mode}
+              selected={selection?.type === 'furniture' && selection.id === item.instanceId}
+              onSelect={() => onSelectionChange({ type: 'furniture', id: item.instanceId })}
+              onDraftStart={onDraftStart}
+              onDraftEnd={onDraftEnd}
+              onDraftChange={onDraftChange}
+            />
+          ))}
+        </Layer>
+      </Stage>
+    </main>
+  );
+}
+
+function BackgroundImageShape({
+  backgroundImage,
+  mode,
+  onDraftStart,
+  onDraftEnd,
+  onDraftChange
+}: {
+  backgroundImage?: BackgroundImageData;
+  mode: ToolMode;
+  onSelect: () => void;
+  onDraftStart: () => void;
+  onDraftEnd: () => void;
+  onDraftChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const image = useHtmlImage(backgroundImage?.dataUrl);
+
+  if (!backgroundImage || !backgroundImage.visible || !image) {
+    return null;
+  }
+
+  const canEditBackground = mode === 'select' && !backgroundImage.locked;
+
+  return (
+    <KonvaImage
+      name="floorplan-bg"
+      image={image}
+      x={backgroundImage.x}
+      y={backgroundImage.y}
+      width={backgroundImage.width}
+      height={backgroundImage.height}
+      opacity={backgroundImage.opacity}
+      draggable={canEditBackground}
+      listening={mode === 'calibrate' || canEditBackground}
+      onDragStart={(event) => {
+        event.cancelBubble = true;
+        onDraftStart();
+      }}
+      onDragMove={(event) => {
+        event.cancelBubble = true;
+        onDraftChange((current) => {
+          if (!current.backgroundImage) {
+            return current;
+          }
+
+          return {
+            ...current,
+            backgroundImage: {
+              ...current.backgroundImage,
+              x: event.target.x(),
+              y: event.target.y()
+            }
+          };
+        });
+      }}
+      onDragEnd={(event) => {
+        event.cancelBubble = true;
+        onDraftEnd();
+      }}
+    />
+  );
+}
+
+function CalibrationGuide({ backgroundImage }: { backgroundImage: BackgroundImageData }) {
+  const start = backgroundImage.calibration?.start;
+  const end = backgroundImage.calibration?.end;
+
+  if (!start && !end) {
+    return null;
+  }
+
+  return (
+    <Group listening={false}>
+      {start && (
+        <>
+          <Circle x={start.x} y={start.y} radius={7} fill="#ffffff" stroke="#d36d2f" strokeWidth={3} />
+          <Text x={start.x + 10} y={start.y - 22} text="点 1" fontSize={13} fill="#9a4a1c" fontStyle="bold" />
+        </>
+      )}
+      {start && end && <Line points={[start.x, start.y, end.x, end.y]} stroke="#d36d2f" strokeWidth={3} dash={[10, 6]} />}
+      {end && (
+        <>
+          <Circle x={end.x} y={end.y} radius={7} fill="#ffffff" stroke="#d36d2f" strokeWidth={3} />
+          <Text x={end.x + 10} y={end.y - 22} text="点 2" fontSize={13} fill="#9a4a1c" fontStyle="bold" />
+        </>
+      )}
+    </Group>
+  );
+}
+
+function WallShape({
+  design,
+  wall,
+  mode,
+  selected,
+  onSelect,
+  onDraftStart,
+  onDraftEnd,
+  onDraftChange
+}: {
+  design: DesignDocument;
+  wall: Wall;
+  mode: ToolMode;
+  selected: boolean;
+  onSelect: () => void;
+  onDraftStart: () => void;
+  onDraftEnd: () => void;
+  onDraftChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const updateWallPoint = (key: 'start' | 'end', point: Point) => {
+    const nextPoint = snapPoint(point, design.canvas.gridSize);
+    onDraftChange((current) => ({
+      ...current,
+      walls: current.walls.map((item) => (item.id === wall.id ? { ...item, [key]: nextPoint } : item)),
+      openings: current.openings.map((opening) => {
+        if (opening.wallId !== wall.id) {
+          return opening;
+        }
+
+        const updatedWall = current.walls.find((item) => item.id === wall.id);
+        const wallForProjection = updatedWall ? { ...updatedWall, [key]: nextPoint } : wall;
+        const projected = projectPointOnWall(opening, wallForProjection);
+
+        return {
+          ...opening,
+          ...projected,
+          rotation: radiansToDegrees(wallAngle(wallForProjection))
+        };
+      })
+    }));
+  };
+
+  return (
+    <Group listening={mode !== 'pan'}>
+      {selected && (
+        <Line
+          points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
+          stroke="#f2a23a"
+          strokeWidth={wall.thickness + 10}
+          opacity={0.32}
+          lineCap="round"
+          listening={false}
+        />
+      )}
+      <Line
+        points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
+        stroke="#303642"
+        strokeWidth={wall.thickness}
+        lineCap="round"
+        onMouseDown={(event) => {
+          event.cancelBubble = true;
+          onSelect();
+        }}
+      />
+      {selected && mode === 'select' && (
+        <>
+          <Circle
+            x={wall.start.x}
+            y={wall.start.y}
+            radius={8}
+            fill="#ffffff"
+            stroke="#2f80ed"
+            strokeWidth={2}
+            draggable
+            onDragStart={(event) => {
+              event.cancelBubble = true;
+              onDraftStart();
+            }}
+            onDragMove={(event) => {
+              event.cancelBubble = true;
+              updateWallPoint('start', { x: event.target.x(), y: event.target.y() });
+            }}
+            onDragEnd={(event) => {
+              event.cancelBubble = true;
+              onDraftEnd();
+            }}
+          />
+          <Circle
+            x={wall.end.x}
+            y={wall.end.y}
+            radius={8}
+            fill="#ffffff"
+            stroke="#2f80ed"
+            strokeWidth={2}
+            draggable
+            onDragStart={(event) => {
+              event.cancelBubble = true;
+              onDraftStart();
+            }}
+            onDragMove={(event) => {
+              event.cancelBubble = true;
+              updateWallPoint('end', { x: event.target.x(), y: event.target.y() });
+            }}
+            onDragEnd={(event) => {
+              event.cancelBubble = true;
+              onDraftEnd();
+            }}
+          />
+        </>
+      )}
+    </Group>
+  );
+}
+
+function OpeningShape({
+  design,
+  opening,
+  mode,
+  selected,
+  onSelect,
+  onDraftStart,
+  onDraftEnd,
+  onDraftChange
+}: {
+  design: DesignDocument;
+  opening: Opening;
+  mode: ToolMode;
+  selected: boolean;
+  onSelect: () => void;
+  onDraftStart: () => void;
+  onDraftEnd: () => void;
+  onDraftChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const widthPx = (opening.width / 100) * design.canvas.scalePxPerMeter;
+
+  return (
+    <Group
+      x={opening.x}
+      y={opening.y}
+      rotation={opening.rotation}
+      draggable={mode === 'select'}
+      listening={mode !== 'pan'}
+      onMouseDown={(event) => {
+        event.cancelBubble = true;
+        onSelect();
+      }}
+      onDragStart={(event) => {
+        event.cancelBubble = true;
+        onDraftStart();
+      }}
+      onDragMove={(event) => {
+        event.cancelBubble = true;
+        const point = { x: event.target.x(), y: event.target.y() };
+        onDraftChange((current) => {
+          const wall = current.walls.find((item) => item.id === opening.wallId);
+
+          if (!wall) {
+            return current;
+          }
+
+          const projected = projectPointOnWall(point, wall);
+
+          return {
+            ...current,
+            openings: current.openings.map((item) =>
+              item.id === opening.id
+                ? {
+                    ...item,
+                    ...projected,
+                    rotation: radiansToDegrees(wallAngle(wall))
+                  }
+                : item
+            )
+          };
+        });
+      }}
+      onDragEnd={(event) => {
+        event.cancelBubble = true;
+        onDraftEnd();
+      }}
+    >
+      <Line points={[-widthPx / 2, 0, widthPx / 2, 0]} stroke="#f8faf6" strokeWidth={24} lineCap="round" />
+      {opening.kind === 'door' ? (
+        <>
+          <Line points={[-widthPx / 2, 0, -widthPx / 2, widthPx]} stroke="#8b5e34" strokeWidth={5} />
+          <Arc
+            x={-widthPx / 2}
+            y={0}
+            innerRadius={widthPx}
+            outerRadius={widthPx}
+            angle={90}
+            rotation={0}
+            stroke="#8b5e34"
+            strokeWidth={2}
+          />
+          <Line points={[-widthPx / 2, widthPx, widthPx / 2, 0]} stroke="#8b5e34" strokeWidth={2} opacity={0.7} />
+        </>
+      ) : (
+        <>
+          <Line points={[-widthPx / 2, -6, widthPx / 2, -6]} stroke="#3486a8" strokeWidth={3} />
+          <Line points={[-widthPx / 2, 6, widthPx / 2, 6]} stroke="#3486a8" strokeWidth={3} />
+        </>
+      )}
+      {selected && <Rect x={-widthPx / 2 - 8} y={-16} width={widthPx + 16} height={32} stroke="#f2a23a" dash={[6, 5]} />}
+    </Group>
+  );
+}
+
+function FurnitureShape({
+  design,
+  furniture,
+  mode,
+  selected,
+  onSelect,
+  onDraftStart,
+  onDraftEnd,
+  onDraftChange
+}: {
+  design: DesignDocument;
+  furniture: FurnitureInstance;
+  mode: ToolMode;
+  selected: boolean;
+  onSelect: () => void;
+  onDraftStart: () => void;
+  onDraftEnd: () => void;
+  onDraftChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const widthPx = (furniture.width / 100) * design.canvas.scalePxPerMeter;
+  const depthPx = (furniture.depth / 100) * design.canvas.scalePxPerMeter;
+
+  return (
+    <Group
+      x={furniture.x}
+      y={furniture.y}
+      rotation={furniture.rotation}
+      draggable={mode === 'select'}
+      listening={mode !== 'pan'}
+      onMouseDown={(event) => {
+        event.cancelBubble = true;
+        onSelect();
+      }}
+      onDragStart={(event) => {
+        event.cancelBubble = true;
+        onDraftStart();
+      }}
+      onDragMove={(event) => {
+        event.cancelBubble = true;
+        const point = snapPoint({ x: event.target.x(), y: event.target.y() }, design.canvas.gridSize);
+        onDraftChange((current) => ({
+          ...current,
+          furniture: current.furniture.map((item) => (item.instanceId === furniture.instanceId ? { ...item, ...point } : item))
+        }));
+      }}
+      onDragEnd={(event) => {
+        event.cancelBubble = true;
+        onDraftEnd();
+      }}
+    >
+      <FurnitureSymbol furniture={furniture} widthPx={widthPx} depthPx={depthPx} />
+      {selected && (
+        <Rect
+          x={-widthPx / 2 - 7}
+          y={-depthPx / 2 - 7}
+          width={widthPx + 14}
+          height={depthPx + 14}
+          stroke="#f2a23a"
+          strokeWidth={2}
+          dash={[8, 5]}
+        />
+      )}
+      <Text
+        x={-widthPx / 2}
+        y={Math.min(depthPx / 2 + 4, 92)}
+        width={widthPx}
+        text={furniture.name}
+        align="center"
+        fontSize={12}
+        fill="#27303f"
+        listening={false}
+      />
+    </Group>
+  );
+}
+
+function FurnitureSymbol({
+  furniture,
+  widthPx,
+  depthPx
+}: {
+  furniture: FurnitureInstance;
+  widthPx: number;
+  depthPx: number;
+}) {
+  const commonProps = {
+    fill: furniture.color,
+    stroke: furniture.accentColor,
+    strokeWidth: 2,
+    cornerRadius: 6
+  };
+
+  if (furniture.shape === 'round') {
+    return (
+      <Group>
+        <Ellipse radiusX={widthPx / 2} radiusY={depthPx / 2} fill={furniture.color} stroke={furniture.accentColor} strokeWidth={2} />
+        <Ellipse
+          radiusX={Math.max(widthPx / 2 - 10, 4)}
+          radiusY={Math.max(depthPx / 2 - 10, 4)}
+          stroke={furniture.accentColor}
+          strokeWidth={1}
+          dash={[5, 4]}
+        />
+      </Group>
+    );
+  }
+
+  if (furniture.shape === 'bed') {
+    return (
+      <Group>
+        <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />
+        <Rect x={-widthPx / 2 + 8} y={-depthPx / 2 + 8} width={widthPx / 2 - 12} height={depthPx * 0.22} fill="#fff6ef" stroke={furniture.accentColor} />
+        <Rect x={2} y={-depthPx / 2 + 8} width={widthPx / 2 - 12} height={depthPx * 0.22} fill="#fff6ef" stroke={furniture.accentColor} />
+        <Line points={[-widthPx / 2 + 8, -depthPx * 0.12, widthPx / 2 - 8, -depthPx * 0.12]} stroke={furniture.accentColor} />
+      </Group>
+    );
+  }
+
+  if (furniture.shape === 'sofa') {
+    return (
+      <Group>
+        <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />
+        <Rect x={-widthPx / 2 + 8} y={-depthPx / 2 + 8} width={widthPx - 16} height={depthPx * 0.38} fill="#ffffff" opacity={0.55} />
+        <Line points={[-widthPx / 2 + 10, 0, widthPx / 2 - 10, 0]} stroke={furniture.accentColor} strokeWidth={1.5} />
+        <Line points={[0, -depthPx / 2 + 10, 0, depthPx / 2 - 10]} stroke={furniture.accentColor} strokeWidth={1.2} opacity={0.7} />
+      </Group>
+    );
+  }
+
+  if (furniture.shape === 'dining') {
+    return (
+      <Group>
+        <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />
+        <Circle x={-widthPx / 2 - 14} y={0} radius={10} fill="#ffffff" stroke={furniture.accentColor} />
+        <Circle x={widthPx / 2 + 14} y={0} radius={10} fill="#ffffff" stroke={furniture.accentColor} />
+        <Circle x={-widthPx * 0.25} y={-depthPx / 2 - 14} radius={10} fill="#ffffff" stroke={furniture.accentColor} />
+        <Circle x={widthPx * 0.25} y={-depthPx / 2 - 14} radius={10} fill="#ffffff" stroke={furniture.accentColor} />
+      </Group>
+    );
+  }
+
+  if (furniture.shape === 'sanitary') {
+    return (
+      <Group>
+        <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />
+        <Ellipse radiusX={widthPx * 0.28} radiusY={depthPx * 0.28} fill="#ffffff" stroke={furniture.accentColor} />
+      </Group>
+    );
+  }
+
+  if (furniture.shape === 'appliance') {
+    return (
+      <Group>
+        <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />
+        <Circle x={0} y={0} radius={Math.min(widthPx, depthPx) * 0.24} fill="#eef5f8" stroke={furniture.accentColor} />
+      </Group>
+    );
+  }
+
+  if (furniture.shape === 'desk') {
+    return (
+      <Group>
+        <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />
+        <Line points={[-widthPx / 2 + 8, 0, widthPx / 2 - 8, 0]} stroke={furniture.accentColor} strokeWidth={1.5} />
+      </Group>
+    );
+  }
+
+  if (furniture.shape === 'storage' || furniture.shape === 'cabinet') {
+    return (
+      <Group>
+        <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />
+        <Line points={[0, -depthPx / 2 + 6, 0, depthPx / 2 - 6]} stroke={furniture.accentColor} strokeWidth={1.2} />
+        <Line points={[-widthPx / 2 + 6, 0, widthPx / 2 - 6, 0]} stroke={furniture.accentColor} strokeWidth={1.2} />
+      </Group>
+    );
+  }
+
+  return <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />;
+}
+
+function RoomLabelShape({
+  room,
+  mode,
+  selected,
+  onSelect,
+  onDraftStart,
+  onDraftEnd,
+  onDraftChange
+}: {
+  room: RoomLabel;
+  mode: ToolMode;
+  selected: boolean;
+  onSelect: () => void;
+  onDraftStart: () => void;
+  onDraftEnd: () => void;
+  onDraftChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  return (
+    <Group
+      x={room.x}
+      y={room.y}
+      draggable={mode === 'select'}
+      listening={mode !== 'pan'}
+      onMouseDown={(event) => {
+        event.cancelBubble = true;
+        onSelect();
+      }}
+      onDragStart={(event) => {
+        event.cancelBubble = true;
+        onDraftStart();
+      }}
+      onDragMove={(event) => {
+        event.cancelBubble = true;
+        onDraftChange((current) => ({
+          ...current,
+          rooms: current.rooms.map((item) =>
+            item.id === room.id ? { ...item, x: event.target.x(), y: event.target.y() } : item
+          )
+        }));
+      }}
+      onDragEnd={(event) => {
+        event.cancelBubble = true;
+        onDraftEnd();
+      }}
+    >
+      <Rect x={-45} y={-20} width={90} height={40} fill="#ffffff" opacity={0.82} cornerRadius={6} />
+      <Text x={-45} y={-15} width={90} text={room.name} align="center" fontSize={14} fontStyle="bold" fill="#38404d" />
+      <Text x={-45} y={4} width={90} text={room.area} align="center" fontSize={12} fill="#687282" />
+      {selected && <Rect x={-49} y={-24} width={98} height={48} stroke="#f2a23a" dash={[6, 5]} cornerRadius={6} />}
+    </Group>
+  );
+}
