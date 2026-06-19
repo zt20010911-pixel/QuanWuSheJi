@@ -1,14 +1,18 @@
 import {
+  Box,
   Download,
   FilePlus2,
+  FileJson,
   FolderOpen,
+  ImageDown,
+  Map,
   Redo2,
   Save,
   Undo2,
   ZoomIn,
   ZoomOut
 } from 'lucide-react';
-import type { DesignDocument } from '../types';
+import type { DesignDocument, ViewMode } from '../types';
 
 type TopBarProps = {
   design: DesignDocument;
@@ -16,11 +20,15 @@ type TopBarProps = {
   canUndo: boolean;
   canRedo: boolean;
   zoom: number;
+  viewMode: ViewMode;
   onRename: (name: string) => void;
   onNew: () => void;
   onSave: () => void;
   onOpen: (id: string) => void;
   onExportPng: () => void;
+  onExportJson: () => void;
+  onExport3DPng: () => void;
+  onViewModeChange: (mode: ViewMode) => void;
   onUndo: () => void;
   onRedo: () => void;
   onZoomIn: () => void;
@@ -41,11 +49,15 @@ export default function TopBar({
   canUndo,
   canRedo,
   zoom,
+  viewMode,
   onRename,
   onNew,
   onSave,
   onOpen,
   onExportPng,
+  onExportJson,
+  onExport3DPng,
+  onViewModeChange,
   onUndo,
   onRedo,
   onZoomIn,
@@ -85,11 +97,41 @@ export default function TopBar({
         </label>
         <button className="icon-button command-button" onClick={onExportPng} title="导出 PNG 平面图" type="button">
           <Download size={17} />
-          <span>导出</span>
+          <span>平面图</span>
         </button>
+        <button className="icon-button command-button" onClick={onExportJson} title="导出方案 JSON" type="button">
+          <FileJson size={17} />
+          <span>JSON</span>
+        </button>
+        {viewMode === 'threeD' && (
+          <button className="icon-button command-button" onClick={onExport3DPng} title="导出 3D 效果图" type="button">
+            <ImageDown size={17} />
+            <span>3D图</span>
+          </button>
+        )}
       </div>
 
       <div className="topbar-tools">
+        <div className="view-toggle" aria-label="切换视图">
+          <button
+            className={viewMode === 'plan' ? 'is-active' : ''}
+            onClick={() => onViewModeChange('plan')}
+            title="平面编辑"
+            type="button"
+          >
+            <Map size={16} />
+            <span>平面</span>
+          </button>
+          <button
+            className={viewMode === 'threeD' ? 'is-active' : ''}
+            onClick={() => onViewModeChange('threeD')}
+            title="3D 预览"
+            type="button"
+          >
+            <Box size={16} />
+            <span>3D</span>
+          </button>
+        </div>
         <button className="icon-button" onClick={onUndo} disabled={!canUndo} title="撤销" type="button">
           <Undo2 size={18} />
         </button>

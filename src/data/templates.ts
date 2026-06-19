@@ -42,6 +42,7 @@ export const DESIGN_TEMPLATES: DesignTemplate[] = [
       id: 'template-one-bedroom',
       name: '一居室方案',
       updatedAt: now(),
+      homeAreaSqm: 48,
       canvas: baseCanvas,
       walls: [
         wall('w-1-outer-1', 260, 180, 940, 180),
@@ -74,6 +75,7 @@ export const DESIGN_TEMPLATES: DesignTemplate[] = [
       id: 'template-two-bedroom',
       name: '两居室方案',
       updatedAt: now(),
+      homeAreaSqm: 69,
       canvas: baseCanvas,
       walls: [
         wall('w-2-outer-1', 220, 150, 1080, 150),
@@ -113,6 +115,7 @@ export const DESIGN_TEMPLATES: DesignTemplate[] = [
       id: 'template-three-bedroom',
       name: '三居室方案',
       updatedAt: now(),
+      homeAreaSqm: 88,
       canvas: baseCanvas,
       walls: [
         wall('w-3-outer-1', 180, 130, 1260, 130),

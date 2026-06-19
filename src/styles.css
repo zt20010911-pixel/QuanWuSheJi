@@ -81,7 +81,8 @@ button:disabled {
 
 .topbar-actions,
 .topbar-tools,
-.zoom-control {
+.zoom-control,
+.view-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -140,6 +141,33 @@ button:disabled {
 .zoom-control {
   padding-left: 6px;
   border-left: 1px solid #d8dedb;
+}
+
+.view-toggle {
+  height: 36px;
+  border: 1px solid #d2dad6;
+  border-radius: 6px;
+  padding: 3px;
+  background: #ffffff;
+}
+
+.view-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 70px;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #536071;
+  font-size: 13px;
+}
+
+.view-toggle button.is-active {
+  background: #e9f5f2;
+  color: #176b61;
 }
 
 .zoom-control span {
@@ -412,6 +440,18 @@ button:disabled {
   height: 100%;
 }
 
+.three-viewer {
+  width: 100%;
+  height: 100%;
+  background: #eef2ef;
+}
+
+.three-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .selection-toolbar {
   position: absolute;
   z-index: 14;
@@ -487,6 +527,22 @@ button:disabled {
 .property-stack {
   display: grid;
   gap: 13px;
+}
+
+.project-info-stack {
+  margin-bottom: 16px;
+  border: 1px solid #dce3df;
+  border-radius: 6px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.area-reference {
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #f2f6f4;
+  color: #536071;
+  font-size: 12px;
 }
 
 .property-stack h2 {

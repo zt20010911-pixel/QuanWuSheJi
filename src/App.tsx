@@ -5,6 +5,7 @@ import DesignerCanvas from './components/DesignerCanvas';
 import LeftPanel from './components/LeftPanel';
 import PropertiesPanel from './components/PropertiesPanel';
 import SelectedFurnitureToolbar from './components/SelectedFurnitureToolbar';
+import ThreeDViewer, { type ThreeDViewerHandle } from './components/ThreeDViewer';
 import TopBar from './components/TopBar';
 import { DESIGN_TEMPLATES, cloneTemplateDesign, createEmptyDesign } from './data/templates';
 import type {
@@ -15,7 +16,8 @@ import type {
   FurnitureInstance,
   Point,
   Selection,
-  ToolMode
+  ToolMode,
+  ViewMode
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
 import { createId } from './utils/geometry';
@@ -80,6 +82,7 @@ const isTypingTarget = (target: EventTarget | null) => {
 
 export default function App() {
   const stageRef = useRef<Konva.Stage | null>(null);
+  const threeViewerRef = useRef<ThreeDViewerHandle | null>(null);
   const draftBaseRef = useRef<DesignDocument | null>(null);
   const [design, setDesign] = useState<DesignDocument>(() => cloneTemplateDesign(DESIGN_TEMPLATES[1]));
   const [savedDesigns, setSavedDesigns] = useState<DesignDocument[]>([]);
@@ -96,6 +99,7 @@ export default function App() {
   const [leftPanelVisible, setLeftPanelVisible] = useState(true);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [furnitureClipboard, setFurnitureClipboard] = useState<FurnitureInstance | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('plan');
 
   const selectedFurniture =
     selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) ?? null : null;
@@ -301,6 +305,10 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (viewMode !== 'plan') {
+        return;
+      }
+
       if (isTypingTarget(event.target)) {
         return;
       }
@@ -371,7 +379,8 @@ export default function App() {
     redo,
     rotateSelectedFurniture,
     selectedFurniture,
-    undo
+    undo,
+    viewMode
   ]);
 
   const applyTemplate = (template: DesignTemplate) => {
@@ -425,6 +434,25 @@ export default function App() {
     setStatusText('已导出 PNG');
   };
 
+  const exportJson = () => {
+    const blob = new Blob([JSON.stringify(stampDesign(design), null, 2)], {
+      type: 'application/json;charset=utf-8'
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    link.download = `${design.name || '全屋设计'}-方案.json`;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatusText('已导出方案 JSON');
+  };
+
+  const exportThreeDPng = () => {
+    threeViewerRef.current?.exportPng();
+    setStatusText('已导出 3D 效果图');
+  };
+
   const handleFurnitureDragStart = (item: FurnitureDefinition) => {
     setDraggedFurnitureId(item.id);
   };
@@ -455,7 +483,9 @@ export default function App() {
   };
 
   const modeText =
-    mode === 'wall'
+    viewMode === 'threeD'
+      ? '3D预览'
+      : mode === 'wall'
       ? '墙体绘制'
       : mode === 'pan'
         ? '画布平移'
@@ -471,11 +501,15 @@ export default function App() {
         canUndo={history.length > 0}
         canRedo={future.length > 0}
         zoom={zoom}
+        viewMode={viewMode}
         onRename={(name) => commitChange((current) => ({ ...current, name }))}
         onNew={handleNew}
         onSave={handleSave}
         onOpen={handleOpen}
         onExportPng={exportPng}
+        onExportJson={exportJson}
+        onExport3DPng={exportThreeDPng}
+        onViewModeChange={setViewMode}
         onUndo={undo}
         onRedo={redo}
         onZoomIn={() => setZoom((value) => Math.min(2.5, value + 0.1))}
@@ -521,23 +555,27 @@ export default function App() {
           >
             {rightPanelVisible ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
           </button>
-          <DesignerCanvas
-            design={design}
-            mode={mode}
-            selection={selection}
-            stageRef={stageRef}
-            zoom={zoom}
-            stagePosition={stagePosition}
-            draggedFurnitureId={draggedFurnitureId}
-            onSelectionChange={setSelection}
-            onCommitChange={commitChange}
-            onDraftStart={beginDraft}
-            onDraftChange={changeDraft}
-            onDraftEnd={endDraft}
-            onZoomChange={setZoom}
-            onStagePositionChange={setStagePosition}
-          />
-          {selectedFurniture && selectedFurnitureToolbarStyle && (
+          {viewMode === 'plan' ? (
+            <DesignerCanvas
+              design={design}
+              mode={mode}
+              selection={selection}
+              stageRef={stageRef}
+              zoom={zoom}
+              stagePosition={stagePosition}
+              draggedFurnitureId={draggedFurnitureId}
+              onSelectionChange={setSelection}
+              onCommitChange={commitChange}
+              onDraftStart={beginDraft}
+              onDraftChange={changeDraft}
+              onDraftEnd={endDraft}
+              onZoomChange={setZoom}
+              onStagePositionChange={setStagePosition}
+            />
+          ) : (
+            <ThreeDViewer ref={threeViewerRef} design={design} />
+          )}
+          {viewMode === 'plan' && selectedFurniture && selectedFurnitureToolbarStyle && (
             <SelectedFurnitureToolbar
               style={selectedFurnitureToolbarStyle}
               canPaste={Boolean(furnitureClipboard)}

@@ -5,6 +5,8 @@ export type Point = {
 
 export type ToolMode = 'select' | 'wall' | 'door' | 'window' | 'pan' | 'calibrate';
 
+export type ViewMode = 'plan' | 'threeD';
+
 export type Selection =
   | { type: 'wall'; id: string }
   | { type: 'opening'; id: string }
@@ -94,6 +96,7 @@ export type DesignDocument = {
   id: string;
   name: string;
   updatedAt: string;
+  homeAreaSqm?: number;
   canvas: {
     width: number;
     height: number;

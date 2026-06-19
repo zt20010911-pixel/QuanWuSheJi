@@ -1,4 +1,4 @@
-import { Image as ImageIcon, RotateCw, Ruler, Trash2 } from 'lucide-react';
+import { Home, Image as ImageIcon, RotateCw, Ruler, Trash2 } from 'lucide-react';
 import type { BackgroundImage, DesignDocument, FurnitureInstance, Opening, RoomLabel, Selection, Wall } from '../types';
 import { pxToMeters, resizeWallByLength, wallLengthPx } from '../utils/geometry';
 
@@ -11,6 +11,12 @@ type PropertiesPanelProps = {
 };
 
 const numberValue = (value: string) => Number.parseFloat(value) || 0;
+
+const getRoomAreaTotal = (rooms: RoomLabel[]) =>
+  rooms.reduce((total, room) => {
+    const area = Number.parseFloat(room.area.replace(',', '.'));
+    return Number.isFinite(area) ? total + area : total;
+  }, 0);
 
 export default function PropertiesPanel({ design, selection, onChange, onDelete, onStartCalibration }: PropertiesPanelProps) {
   const selectedWall = selection?.type === 'wall' ? design.walls.find((item) => item.id === selection.id) : undefined;
@@ -26,6 +32,8 @@ export default function PropertiesPanel({ design, selection, onChange, onDelete,
         <RotateCw size={16} />
         <span>属性</span>
       </div>
+
+      <ProjectInfoEditor design={design} onChange={onChange} />
 
       {!selection && (
         <div className="empty-properties">
@@ -73,6 +81,45 @@ export default function PropertiesPanel({ design, selection, onChange, onDelete,
         <BackgroundImageEditor backgroundImage={design.backgroundImage} onChange={onChange} onStartCalibration={onStartCalibration} />
       )}
     </aside>
+  );
+}
+
+function ProjectInfoEditor({
+  design,
+  onChange
+}: {
+  design: DesignDocument;
+  onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const roomAreaTotal = getRoomAreaTotal(design.rooms);
+
+  return (
+    <div className="property-stack project-info-stack">
+      <h2>
+        <Home size={16} />
+        方案信息
+      </h2>
+      <label>
+        <span>房屋总面积（㎡）</span>
+        <input
+          type="number"
+          min="0"
+          step="0.1"
+          value={design.homeAreaSqm ?? ''}
+          onChange={(event) => {
+            const rawValue = event.target.value.trim();
+            const homeAreaSqm = rawValue ? numberValue(rawValue) : undefined;
+
+            onChange((current) => ({
+              ...current,
+              homeAreaSqm
+            }));
+          }}
+          placeholder="例如 89.5"
+        />
+      </label>
+      <div className="area-reference">房间标注合计：{roomAreaTotal.toFixed(1)}㎡</div>
+    </div>
   );
 }
 
