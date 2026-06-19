@@ -1,4 +1,4 @@
-import { Home, Image as ImageIcon, RotateCw, Ruler, Trash2 } from 'lucide-react';
+import { Home, Image as ImageIcon, RotateCw, Ruler, Trash2, Wand2 } from 'lucide-react';
 import type { BackgroundImage, DesignDocument, FurnitureInstance, Opening, RoomLabel, Selection, Wall } from '../types';
 import { pxToMeters, resizeWallByLength, wallLengthPx } from '../utils/geometry';
 
@@ -8,6 +8,8 @@ type PropertiesPanelProps = {
   onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
   onDelete: () => void;
   onStartCalibration: () => void;
+  onRecognizeFloorplan: () => void;
+  recognizingFloorplan: boolean;
 };
 
 const numberValue = (value: string) => Number.parseFloat(value) || 0;
@@ -18,7 +20,15 @@ const getRoomAreaTotal = (rooms: RoomLabel[]) =>
     return Number.isFinite(area) ? total + area : total;
   }, 0);
 
-export default function PropertiesPanel({ design, selection, onChange, onDelete, onStartCalibration }: PropertiesPanelProps) {
+export default function PropertiesPanel({
+  design,
+  selection,
+  onChange,
+  onDelete,
+  onStartCalibration,
+  onRecognizeFloorplan,
+  recognizingFloorplan
+}: PropertiesPanelProps) {
   const selectedWall = selection?.type === 'wall' ? design.walls.find((item) => item.id === selection.id) : undefined;
   const selectedOpening =
     selection?.type === 'opening' ? design.openings.find((item) => item.id === selection.id) : undefined;
@@ -78,7 +88,13 @@ export default function PropertiesPanel({ design, selection, onChange, onDelete,
       )}
 
       {design.backgroundImage && (
-        <BackgroundImageEditor backgroundImage={design.backgroundImage} onChange={onChange} onStartCalibration={onStartCalibration} />
+        <BackgroundImageEditor
+          backgroundImage={design.backgroundImage}
+          onChange={onChange}
+          onStartCalibration={onStartCalibration}
+          onRecognizeFloorplan={onRecognizeFloorplan}
+          recognizingFloorplan={recognizingFloorplan}
+        />
       )}
     </aside>
   );
@@ -126,11 +142,15 @@ function ProjectInfoEditor({
 function BackgroundImageEditor({
   backgroundImage,
   onChange,
-  onStartCalibration
+  onStartCalibration,
+  onRecognizeFloorplan,
+  recognizingFloorplan
 }: {
   backgroundImage: BackgroundImage;
   onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
   onStartCalibration: () => void;
+  onRecognizeFloorplan: () => void;
+  recognizingFloorplan: boolean;
 }) {
   const calibration = backgroundImage.calibration ?? {};
   const hasCalibrationPoints = Boolean(calibration.start && calibration.end);
@@ -254,6 +274,10 @@ function BackgroundImageEditor({
       <button className="secondary-button" type="button" onClick={onStartCalibration}>
         <Ruler size={16} />
         重新标定
+      </button>
+      <button className="secondary-button" type="button" onClick={onRecognizeFloorplan} disabled={recognizingFloorplan}>
+        <Wand2 size={16} />
+        {recognizingFloorplan ? '正在识别' : '自动生成墙体'}
       </button>
       <button
         className="danger-button"

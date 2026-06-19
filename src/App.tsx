@@ -20,6 +20,7 @@ import type {
   ViewMode
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
+import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId } from './utils/geometry';
 
 const HISTORY_LIMIT = 80;
@@ -100,6 +101,7 @@ export default function App() {
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [furnitureClipboard, setFurnitureClipboard] = useState<FurnitureInstance | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
+  const [recognizingFloorplan, setRecognizingFloorplan] = useState(false);
 
   const selectedFurniture =
     selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) ?? null : null;
@@ -482,6 +484,49 @@ export default function App() {
     setStatusText('请在户型图上点选两点进行比例标定');
   };
 
+  const recognizeFloorplan = async () => {
+    if (!design.backgroundImage || recognizingFloorplan) {
+      return;
+    }
+
+    setRecognizingFloorplan(true);
+    setStatusText('正在识别户型图墙体');
+
+    try {
+      const result = await recognizeFloorplanWalls(design.backgroundImage, { gridSize: design.canvas.gridSize });
+
+      if (result.walls.length === 0) {
+        setStatusText('未识别到足够清晰的墙体，请调高底图清晰度后重试');
+        return;
+      }
+
+      commitChange(
+        (current) => ({
+          ...current,
+          walls: result.walls,
+          openings: [],
+          rooms: [],
+          backgroundImage: current.backgroundImage
+            ? {
+                ...current.backgroundImage,
+                visible: true,
+                locked: true,
+                opacity: Math.min(current.backgroundImage.opacity, 0.42)
+              }
+            : current.backgroundImage
+        }),
+        null
+      );
+      setMode('select');
+      setViewMode('plan');
+      setStatusText(`已自动生成 ${result.walls.length} 面墙，可继续手动调整`);
+    } catch {
+      setStatusText('自动识别失败，请换更清晰的户型图后重试');
+    } finally {
+      setRecognizingFloorplan(false);
+    }
+  };
+
   const modeText =
     viewMode === 'threeD'
       ? '3D预览'
@@ -596,6 +641,8 @@ export default function App() {
           onChange={commitChange}
           onDelete={deleteSelection}
           onStartCalibration={startCalibration}
+          onRecognizeFloorplan={recognizeFloorplan}
+          recognizingFloorplan={recognizingFloorplan}
         />
       </div>
     </div>
