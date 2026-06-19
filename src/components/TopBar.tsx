@@ -4,8 +4,12 @@ import {
   FilePlus2,
   FileJson,
   FolderOpen,
+  Grid2X2,
+  Image,
   ImageDown,
+  LocateFixed,
   Map,
+  Maximize2,
   Redo2,
   Save,
   Undo2,
@@ -21,6 +25,9 @@ type TopBarProps = {
   canRedo: boolean;
   zoom: number;
   viewMode: ViewMode;
+  showGrid: boolean;
+  hasBackground: boolean;
+  backgroundVisible: boolean;
   onRename: (name: string) => void;
   onNew: () => void;
   onSave: () => void;
@@ -29,6 +36,10 @@ type TopBarProps = {
   onExportJson: () => void;
   onExport3DPng: () => void;
   onViewModeChange: (mode: ViewMode) => void;
+  onFitView: () => void;
+  onCenterView: () => void;
+  onToggleGrid: () => void;
+  onToggleBackground: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onZoomIn: () => void;
@@ -50,6 +61,9 @@ export default function TopBar({
   canRedo,
   zoom,
   viewMode,
+  showGrid,
+  hasBackground,
+  backgroundVisible,
   onRename,
   onNew,
   onSave,
@@ -58,6 +72,10 @@ export default function TopBar({
   onExportJson,
   onExport3DPng,
   onViewModeChange,
+  onFitView,
+  onCenterView,
+  onToggleGrid,
+  onToggleBackground,
   onUndo,
   onRedo,
   onZoomIn,
@@ -132,6 +150,31 @@ export default function TopBar({
             <span>3D</span>
           </button>
         </div>
+        <button className="icon-button" onClick={onFitView} title="适配画布" type="button">
+          <Maximize2 size={18} />
+        </button>
+        <button className="icon-button" onClick={onCenterView} title="居中户型" type="button">
+          <LocateFixed size={18} />
+        </button>
+        <button
+          className={showGrid ? 'icon-button is-active' : 'icon-button'}
+          onClick={onToggleGrid}
+          title={showGrid ? '隐藏网格' : '显示网格'}
+          type="button"
+          aria-pressed={showGrid}
+        >
+          <Grid2X2 size={18} />
+        </button>
+        <button
+          className={backgroundVisible ? 'icon-button is-active' : 'icon-button'}
+          onClick={onToggleBackground}
+          disabled={!hasBackground}
+          title={backgroundVisible ? '隐藏底图' : '显示底图'}
+          type="button"
+          aria-pressed={backgroundVisible}
+        >
+          <Image size={18} />
+        </button>
         <button className="icon-button" onClick={onUndo} disabled={!canUndo} title="撤销" type="button">
           <Undo2 size={18} />
         </button>

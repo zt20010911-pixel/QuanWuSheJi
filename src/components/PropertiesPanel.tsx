@@ -1,5 +1,15 @@
-import { Home, Image as ImageIcon, RotateCw, Ruler, Trash2, Wand2 } from 'lucide-react';
-import type { BackgroundImage, DesignDocument, FurnitureInstance, Opening, RoomLabel, Selection, Wall } from '../types';
+import { Check, Home, Image as ImageIcon, RotateCw, Ruler, Trash2, Wand2, X } from 'lucide-react';
+import type {
+  BackgroundImage,
+  DesignDocument,
+  FurnitureInstance,
+  Opening,
+  RecognitionSession,
+  RenderSettings,
+  RoomLabel,
+  Selection,
+  Wall
+} from '../types';
 import { pxToMeters, resizeWallByLength, wallLengthPx } from '../utils/geometry';
 
 type PropertiesPanelProps = {
@@ -9,7 +19,14 @@ type PropertiesPanelProps = {
   onDelete: () => void;
   onStartCalibration: () => void;
   onRecognizeFloorplan: () => void;
+  onKeepBackgroundReference: () => void;
+  onConfirmRecognitionPreview: () => void;
+  onDiscardRecognitionPreview: () => void;
+  onMergeRecognitionPreviewWalls: () => void;
+  onRemoveShortRecognitionPreviewWalls: () => void;
   recognizingFloorplan: boolean;
+  importWizardOpen: boolean;
+  recognitionPreview: RecognitionSession | null;
 };
 
 const numberValue = (value: string) => Number.parseFloat(value) || 0;
@@ -27,7 +44,14 @@ export default function PropertiesPanel({
   onDelete,
   onStartCalibration,
   onRecognizeFloorplan,
-  recognizingFloorplan
+  onKeepBackgroundReference,
+  onConfirmRecognitionPreview,
+  onDiscardRecognitionPreview,
+  onMergeRecognitionPreviewWalls,
+  onRemoveShortRecognitionPreviewWalls,
+  recognizingFloorplan,
+  importWizardOpen,
+  recognitionPreview
 }: PropertiesPanelProps) {
   const selectedWall = selection?.type === 'wall' ? design.walls.find((item) => item.id === selection.id) : undefined;
   const selectedOpening =
@@ -44,6 +68,27 @@ export default function PropertiesPanel({
       </div>
 
       <ProjectInfoEditor design={design} onChange={onChange} />
+      <RenderSettingsEditor design={design} onChange={onChange} />
+
+      {design.backgroundImage && importWizardOpen && (
+        <ImportWizardCard
+          recognizingFloorplan={recognizingFloorplan}
+          onRecognizeFloorplan={onRecognizeFloorplan}
+          onKeepBackgroundReference={onKeepBackgroundReference}
+        />
+      )}
+
+      {recognitionPreview && (
+        <RecognitionPreviewEditor
+          recognitionPreview={recognitionPreview}
+          recognizingFloorplan={recognizingFloorplan}
+          onConfirm={onConfirmRecognitionPreview}
+          onDiscard={onDiscardRecognitionPreview}
+          onMerge={onMergeRecognitionPreviewWalls}
+          onRemoveShortWalls={onRemoveShortRecognitionPreviewWalls}
+          onRecognizeAgain={onRecognizeFloorplan}
+        />
+      )}
 
       {!selection && (
         <div className="empty-properties">
@@ -100,6 +145,87 @@ export default function PropertiesPanel({
   );
 }
 
+function ImportWizardCard({
+  recognizingFloorplan,
+  onRecognizeFloorplan,
+  onKeepBackgroundReference
+}: {
+  recognizingFloorplan: boolean;
+  onRecognizeFloorplan: () => void;
+  onKeepBackgroundReference: () => void;
+}) {
+  return (
+    <div className="property-stack import-wizard-stack">
+      <h2>
+        <Wand2 size={16} />
+        导入向导
+      </h2>
+      <button className="primary-button" type="button" onClick={onRecognizeFloorplan} disabled={recognizingFloorplan}>
+        <Wand2 size={16} />
+        {recognizingFloorplan ? '正在识别' : '清空并识别'}
+      </button>
+      <button className="secondary-button" type="button" onClick={onKeepBackgroundReference}>
+        <ImageIcon size={16} />
+        叠加参考
+      </button>
+    </div>
+  );
+}
+
+function RecognitionPreviewEditor({
+  recognitionPreview,
+  recognizingFloorplan,
+  onConfirm,
+  onDiscard,
+  onMerge,
+  onRemoveShortWalls,
+  onRecognizeAgain
+}: {
+  recognitionPreview: RecognitionSession;
+  recognizingFloorplan: boolean;
+  onConfirm: () => void;
+  onDiscard: () => void;
+  onMerge: () => void;
+  onRemoveShortWalls: () => void;
+  onRecognizeAgain: () => void;
+}) {
+  return (
+    <div className="property-stack recognition-stack">
+      <h2>
+        <Wand2 size={16} />
+        识别结果
+      </h2>
+      <div className="recognition-summary">
+        <span>{recognitionPreview.wallCount} 面预览墙体</span>
+        <span>置信度：{recognitionPreview.confidence}</span>
+        <span>
+          横向 {recognitionPreview.horizontalCount} / 纵向 {recognitionPreview.verticalCount}
+        </span>
+      </div>
+      <button className="primary-button" type="button" onClick={onConfirm}>
+        <Check size={16} />
+        确认写入方案
+      </button>
+      <div className="property-button-row">
+        <button className="secondary-button" type="button" onClick={onMerge}>
+          合并短墙
+        </button>
+        <button className="secondary-button" type="button" onClick={onRemoveShortWalls}>
+          删除短墙
+        </button>
+      </div>
+      <button className="secondary-button" type="button" onClick={onRecognizeAgain} disabled={recognizingFloorplan}>
+        <Wand2 size={16} />
+        {recognizingFloorplan ? '正在识别' : '重新识别'}
+      </button>
+      <button className="danger-button" type="button" onClick={onDiscard}>
+        <X size={16} />
+        放弃预览
+      </button>
+    </div>
+  );
+}
+
 function ProjectInfoEditor({
   design,
   onChange
@@ -135,6 +261,179 @@ function ProjectInfoEditor({
         />
       </label>
       <div className="area-reference">房间标注合计：{roomAreaTotal.toFixed(1)}㎡</div>
+    </div>
+  );
+}
+
+const materialModes: Array<{ value: RenderSettings['materialMode']; label: string }> = [
+  { value: 'clean', label: '清爽' },
+  { value: 'warm', label: '暖色' },
+  { value: 'contrast', label: '对比' }
+];
+
+const lightModes: Array<{ value: RenderSettings['lightMode']; label: string }> = [
+  { value: 'daylight', label: '日光' },
+  { value: 'warm', label: '暖光' },
+  { value: 'studio', label: '影棚' }
+];
+
+const cameraPresets: Array<{ value: RenderSettings['cameraPreset']; label: string }> = [
+  { value: 'overview', label: '俯视' },
+  { value: 'corner', label: '斜角' },
+  { value: 'front', label: '正面' }
+];
+
+function RenderSettingsEditor({
+  design,
+  onChange
+}: {
+  design: DesignDocument;
+  onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const settings = design.renderSettings;
+
+  if (!settings) {
+    return null;
+  }
+
+  return (
+    <div className="property-stack render-settings-stack">
+      <h2>3D 效果图</h2>
+      <label>
+        <span>视角</span>
+        <select
+          value={settings.cameraPreset}
+          onChange={(event) => {
+            const cameraPreset = event.target.value as RenderSettings['cameraPreset'];
+            onChange((current) => ({
+              ...current,
+              renderSettings: current.renderSettings ? { ...current.renderSettings, cameraPreset } : current.renderSettings
+            }));
+          }}
+        >
+          {cameraPresets.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>灯光</span>
+        <select
+          value={settings.lightMode}
+          onChange={(event) => {
+            const lightMode = event.target.value as RenderSettings['lightMode'];
+            onChange((current) => ({
+              ...current,
+              renderSettings: current.renderSettings ? { ...current.renderSettings, lightMode } : current.renderSettings
+            }));
+          }}
+        >
+          {lightModes.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>材质模式</span>
+        <select
+          value={settings.materialMode}
+          onChange={(event) => {
+            const materialMode = event.target.value as RenderSettings['materialMode'];
+            onChange((current) => ({
+              ...current,
+              renderSettings: current.renderSettings ? { ...current.renderSettings, materialMode } : current.renderSettings
+            }));
+          }}
+        >
+          {materialModes.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="material-color-row">
+        <label>
+          <span>墙面</span>
+          <input
+            type="color"
+            value={settings.wallMaterial}
+            onChange={(event) => {
+              const wallMaterial = event.target.value;
+              onChange((current) => ({
+                ...current,
+                renderSettings: current.renderSettings ? { ...current.renderSettings, wallMaterial } : current.renderSettings
+              }));
+            }}
+          />
+        </label>
+        <label>
+          <span>地面</span>
+          <input
+            type="color"
+            value={settings.floorMaterial}
+            onChange={(event) => {
+              const floorMaterial = event.target.value;
+              onChange((current) => ({
+                ...current,
+                renderSettings: current.renderSettings ? { ...current.renderSettings, floorMaterial } : current.renderSettings
+              }));
+            }}
+          />
+        </label>
+      </div>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={settings.showBackgroundIn3D}
+          onChange={(event) => {
+            const showBackgroundIn3D = event.target.checked;
+            onChange((current) => ({
+              ...current,
+              renderSettings: current.renderSettings
+                ? { ...current.renderSettings, showBackgroundIn3D }
+                : current.renderSettings
+            }));
+          }}
+        />
+        <span>3D 显示底图</span>
+      </label>
+      <button
+        className="secondary-button ai-draft-button"
+        type="button"
+        onClick={() => {
+          onChange((current) => {
+            const inputSnapshot: DesignDocument = {
+              ...current,
+              cloudTasks: []
+            };
+
+            return {
+              ...current,
+              cloudTasks: [
+                {
+                  id: `ai-render-${Date.now().toString(36)}`,
+                  kind: 'ai-render',
+                  status: 'draft',
+                  createdAt: new Date().toISOString(),
+                  inputDesignId: current.id,
+                  inputSnapshot,
+                  note: '本地 AI 渲染任务草稿，暂未提交云端服务'
+                },
+                ...(current.cloudTasks ?? [])
+              ]
+            };
+          });
+        }}
+      >
+        <Wand2 size={16} />
+        保存 AI 渲染草稿
+      </button>
+      <div className="area-reference">草稿任务：{design.cloudTasks?.length ?? 0}</div>
     </div>
   );
 }
@@ -461,6 +760,58 @@ function FurnitureEditor({
             }));
           }}
         />
+      </label>
+      <label>
+        <span>高度（米）</span>
+        <input
+          type="number"
+          min="0.05"
+          step="0.05"
+          value={furniture.height ?? 0}
+          onChange={(event) => {
+            const height = numberValue(event.target.value);
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) => (item.instanceId === furniture.instanceId ? { ...item, height } : item))
+            }));
+          }}
+        />
+      </label>
+      <label>
+        <span>材质</span>
+        <select
+          value={furniture.material ?? '木饰面'}
+          onChange={(event) => {
+            const material = event.target.value;
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) => (item.instanceId === furniture.instanceId ? { ...item, material } : item))
+            }));
+          }}
+        >
+          <option value="木饰面">木饰面</option>
+          <option value="布艺">布艺</option>
+          <option value="金属">金属</option>
+          <option value="陶瓷">陶瓷</option>
+          <option value="玻璃">玻璃</option>
+        </select>
+      </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={Boolean(furniture.favorite)}
+          onChange={(event) => {
+            const favorite = event.target.checked;
+            onChange((current) => ({
+              ...current,
+              favoriteFurnitureIds: favorite
+                ? Array.from(new Set([...(current.favoriteFurnitureIds ?? []), furniture.id]))
+                : (current.favoriteFurnitureIds ?? []).filter((id) => id !== furniture.id),
+              furniture: current.furniture.map((item) => (item.instanceId === furniture.instanceId ? { ...item, favorite } : item))
+            }));
+          }}
+        />
+        <span>收藏到家具库</span>
       </label>
       <label>
         <span>旋转角度</span>

@@ -1,4 +1,5 @@
 import type { DesignDocument, DesignTemplate, Wall } from '../types';
+import { normalizeDesign } from '../utils/designMigration';
 
 const now = () => new Date().toISOString();
 
@@ -10,21 +11,22 @@ const wall = (id: string, startX: number, startY: number, endX: number, endY: nu
   roomId
 });
 
-export const createEmptyDesign = (name = '未命名方案'): DesignDocument => ({
-  id: `design-${Date.now().toString(36)}`,
-  name,
-  updatedAt: now(),
-  canvas: {
-    width: 1800,
-    height: 1200,
-    gridSize: 20,
-    scalePxPerMeter: 80
-  },
-  walls: [],
-  openings: [],
-  furniture: [],
-  rooms: []
-});
+export const createEmptyDesign = (name = '未命名方案'): DesignDocument =>
+  normalizeDesign({
+    id: `design-${Date.now().toString(36)}`,
+    name,
+    updatedAt: now(),
+    canvas: {
+      width: 1800,
+      height: 1200,
+      gridSize: 20,
+      scalePxPerMeter: 80
+    },
+    walls: [],
+    openings: [],
+    furniture: [],
+    rooms: []
+  });
 
 const baseCanvas = {
   width: 1800,
@@ -153,7 +155,7 @@ export const DESIGN_TEMPLATES: DesignTemplate[] = [
 ];
 
 export const cloneTemplateDesign = (template: DesignTemplate): DesignDocument => ({
-  ...structuredClone(template.design),
+  ...normalizeDesign(structuredClone(template.design)),
   id: `design-${Date.now().toString(36)}`,
   updatedAt: now()
 });

@@ -8,6 +8,7 @@ import type {
   FurnitureInstance,
   Opening,
   Point,
+  RecognitionSession,
   RoomLabel,
   Selection,
   ToolMode,
@@ -30,6 +31,10 @@ type DesignerCanvasProps = {
   zoom: number;
   stagePosition: Point;
   draggedFurnitureId: string | null;
+  recognitionPreview?: RecognitionSession | null;
+  showGrid?: boolean;
+  fitViewSignal?: number;
+  centerViewSignal?: number;
   onSelectionChange: (selection: Selection | null) => void;
   onCommitChange: (updater: (current: DesignDocument) => DesignDocument, selection?: Selection | null) => void;
   onDraftStart: () => void;
@@ -67,6 +72,62 @@ const isPointInBackground = (point: Point, backgroundImage: BackgroundImageData)
   point.y >= backgroundImage.y &&
   point.y <= backgroundImage.y + backgroundImage.height;
 
+type Bounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+const extendBounds = (bounds: Bounds, x: number, y: number) => ({
+  minX: Math.min(bounds.minX, x),
+  minY: Math.min(bounds.minY, y),
+  maxX: Math.max(bounds.maxX, x),
+  maxY: Math.max(bounds.maxY, y)
+});
+
+const getDesignBounds = (design: DesignDocument, recognitionPreview?: RecognitionSession | null) => {
+  let bounds: Bounds = {
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY
+  };
+
+  const walls = recognitionPreview?.walls.length ? recognitionPreview.walls : design.walls;
+  walls.forEach((wall) => {
+    bounds = extendBounds(bounds, wall.start.x, wall.start.y);
+    bounds = extendBounds(bounds, wall.end.x, wall.end.y);
+  });
+
+  design.furniture.forEach((item) => {
+    const widthPx = (item.width / 100) * design.canvas.scalePxPerMeter;
+    const depthPx = (item.depth / 100) * design.canvas.scalePxPerMeter;
+    bounds = extendBounds(bounds, item.x - widthPx / 2, item.y - depthPx / 2);
+    bounds = extendBounds(bounds, item.x + widthPx / 2, item.y + depthPx / 2);
+  });
+
+  if (design.backgroundImage?.visible) {
+    bounds = extendBounds(bounds, design.backgroundImage.x, design.backgroundImage.y);
+    bounds = extendBounds(
+      bounds,
+      design.backgroundImage.x + design.backgroundImage.width,
+      design.backgroundImage.y + design.backgroundImage.height
+    );
+  }
+
+  if (!Number.isFinite(bounds.minX)) {
+    return {
+      minX: 0,
+      minY: 0,
+      maxX: design.canvas.width,
+      maxY: design.canvas.height
+    };
+  }
+
+  return bounds;
+};
+
 export default function DesignerCanvas({
   design,
   mode,
@@ -75,6 +136,10 @@ export default function DesignerCanvas({
   zoom,
   stagePosition,
   draggedFurnitureId,
+  recognitionPreview,
+  showGrid = true,
+  fitViewSignal = 0,
+  centerViewSignal = 0,
   onSelectionChange,
   onCommitChange,
   onDraftStart,
@@ -87,6 +152,8 @@ export default function DesignerCanvas({
   const [stageSize, setStageSize] = useState({ width: 900, height: 700 });
   const [wallStart, setWallStart] = useState<Point | null>(null);
   const [wallPreview, setWallPreview] = useState<Point | null>(null);
+  const lastFitViewSignalRef = useRef(0);
+  const lastCenterViewSignalRef = useRef(0);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -118,6 +185,40 @@ export default function DesignerCanvas({
 
     return lines;
   }, [design.canvas]);
+
+  const applyViewportToBounds = (fit: boolean) => {
+    const bounds = getDesignBounds(design, recognitionPreview);
+    const padding = 72;
+    const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
+    const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
+    const nextZoom = fit
+      ? clampZoom(Math.min((stageSize.width - padding * 2) / contentWidth, (stageSize.height - padding * 2) / contentHeight))
+      : zoom;
+
+    onZoomChange(nextZoom);
+    onStagePositionChange({
+      x: stageSize.width / 2 - ((bounds.minX + bounds.maxX) / 2) * nextZoom,
+      y: stageSize.height / 2 - ((bounds.minY + bounds.maxY) / 2) * nextZoom
+    });
+  };
+
+  useEffect(() => {
+    if (fitViewSignal === lastFitViewSignalRef.current) {
+      return;
+    }
+
+    lastFitViewSignalRef.current = fitViewSignal;
+    applyViewportToBounds(true);
+  }, [fitViewSignal]);
+
+  useEffect(() => {
+    if (centerViewSignal === lastCenterViewSignalRef.current) {
+      return;
+    }
+
+    lastCenterViewSignalRef.current = centerViewSignal;
+    applyViewportToBounds(false);
+  }, [centerViewSignal]);
 
   const getPointerWorldPoint = () => {
     const stage = stageRef.current;
@@ -377,19 +478,22 @@ export default function DesignerCanvas({
             onDraftEnd={onDraftEnd}
             onDraftChange={onDraftChange}
           />
-          {gridLines.map((line) => (
-            <Line
-              key={line.key}
-              points={line.points}
-              stroke={line.major ? '#d6ded9' : '#edf1ee'}
-              strokeWidth={line.major ? 1 : 0.7}
-              listening={false}
-            />
-          ))}
+          {showGrid &&
+            gridLines.map((line) => (
+              <Line
+                key={line.key}
+                points={line.points}
+                stroke={line.major ? '#d6ded9' : '#edf1ee'}
+                strokeWidth={line.major ? 1 : 0.7}
+                listening={false}
+              />
+            ))}
           {design.backgroundImage?.visible && <CalibrationGuide backgroundImage={design.backgroundImage} />}
         </Layer>
 
         <Layer>
+          {recognitionPreview && <RecognitionPreviewShape recognition={recognitionPreview} />}
+
           {design.rooms.map((room) => (
             <RoomLabelShape
               key={room.id}
@@ -458,6 +562,24 @@ export default function DesignerCanvas({
         </Layer>
       </Stage>
     </main>
+  );
+}
+
+function RecognitionPreviewShape({ recognition }: { recognition: RecognitionSession }) {
+  return (
+    <Group listening={false}>
+      {recognition.walls.map((wall) => (
+        <Line
+          key={wall.id}
+          points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
+          stroke="#21a67a"
+          strokeWidth={Math.max(8, wall.thickness)}
+          opacity={0.72}
+          dash={[18, 10]}
+          lineCap="round"
+        />
+      ))}
+    </Group>
   );
 }
 

@@ -15,20 +15,24 @@ import type {
   FurnitureDefinition,
   FurnitureInstance,
   Point,
+  RecognitionSession,
   Selection,
   ToolMode,
-  ViewMode
+  ViewMode,
+  Wall
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
 import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId } from './utils/geometry';
+import { normalizeDesign, normalizeFurnitureInstance } from './utils/designMigration';
 
 const HISTORY_LIMIT = 80;
 
-const stampDesign = (design: DesignDocument): DesignDocument => ({
-  ...design,
-  updatedAt: new Date().toISOString()
-});
+const stampDesign = (design: DesignDocument): DesignDocument =>
+  normalizeDesign({
+    ...design,
+    updatedAt: new Date().toISOString()
+  });
 
 const keepRecentHistory = (items: DesignDocument[]) => items.slice(Math.max(0, items.length - HISTORY_LIMIT));
 
@@ -81,6 +85,85 @@ const isTypingTarget = (target: EventTarget | null) => {
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName);
 };
 
+const getWallLength = (wall: Wall) => Math.hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+
+const isHorizontalWall = (wall: Wall) => Math.abs(wall.start.y - wall.end.y) <= Math.abs(wall.start.x - wall.end.x);
+
+const createRecognitionSession = (
+  result: Awaited<ReturnType<typeof recognizeFloorplanWalls>>,
+  backgroundImage: BackgroundImage,
+  gridSize: number
+): RecognitionSession => {
+  const wallCount = result.walls.length;
+  const confidence = wallCount >= 12 ? '高' : wallCount >= 6 ? '中' : '低';
+
+  return {
+    id: createId('recognition'),
+    createdAt: new Date().toISOString(),
+    sourceFileName: backgroundImage.fileName,
+    status: 'draft',
+    walls: result.walls,
+    wallCount,
+    horizontalCount: result.horizontalCount,
+    verticalCount: result.verticalCount,
+    confidence,
+    parameters: {
+      gridSize,
+      minWallLength: result.minWallLength
+    }
+  };
+};
+
+const mergeRecognitionWalls = (walls: Wall[], gridSize: number) => {
+  const sortedWalls = walls
+    .slice()
+    .sort((left, right) => Number(isHorizontalWall(right)) - Number(isHorizontalWall(left)) || getWallLength(right) - getWallLength(left));
+  const merged: Wall[] = [];
+
+  sortedWalls.forEach((wall) => {
+    const horizontal = isHorizontalWall(wall);
+    const lineCoordinate = horizontal ? wall.start.y : wall.start.x;
+    const wallStart = horizontal ? Math.min(wall.start.x, wall.end.x) : Math.min(wall.start.y, wall.end.y);
+    const wallEnd = horizontal ? Math.max(wall.start.x, wall.end.x) : Math.max(wall.start.y, wall.end.y);
+    const target = merged.find((item) => {
+      if (isHorizontalWall(item) !== horizontal) {
+        return false;
+      }
+
+      const itemLineCoordinate = horizontal ? item.start.y : item.start.x;
+      const itemStart = horizontal ? Math.min(item.start.x, item.end.x) : Math.min(item.start.y, item.end.y);
+      const itemEnd = horizontal ? Math.max(item.start.x, item.end.x) : Math.max(item.start.y, item.end.y);
+      const sameLine = Math.abs(itemLineCoordinate - lineCoordinate) <= gridSize;
+      const closeGap = wallStart <= itemEnd + gridSize * 2 && wallEnd >= itemStart - gridSize * 2;
+
+      return sameLine && closeGap;
+    });
+
+    if (!target) {
+      merged.push(structuredClone(wall));
+      return;
+    }
+
+    const targetStart = horizontal ? Math.min(target.start.x, target.end.x) : Math.min(target.start.y, target.end.y);
+    const targetEnd = horizontal ? Math.max(target.start.x, target.end.x) : Math.max(target.start.y, target.end.y);
+    const nextStart = Math.min(targetStart, wallStart);
+    const nextEnd = Math.max(targetEnd, wallEnd);
+    const nextThickness = Math.max(target.thickness, wall.thickness);
+
+    if (horizontal) {
+      target.start = { x: nextStart, y: target.start.y };
+      target.end = { x: nextEnd, y: target.end.y };
+    } else {
+      target.start = { x: target.start.x, y: nextStart };
+      target.end = { x: target.end.x, y: nextEnd };
+    }
+
+    target.thickness = nextThickness;
+  });
+
+  return merged;
+};
+
 export default function App() {
   const stageRef = useRef<Konva.Stage | null>(null);
   const threeViewerRef = useRef<ThreeDViewerHandle | null>(null);
@@ -102,6 +185,11 @@ export default function App() {
   const [furnitureClipboard, setFurnitureClipboard] = useState<FurnitureInstance | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [recognizingFloorplan, setRecognizingFloorplan] = useState(false);
+  const [importWizardOpen, setImportWizardOpen] = useState(false);
+  const [recognitionPreview, setRecognitionPreview] = useState<RecognitionSession | null>(null);
+  const [showGrid, setShowGrid] = useState(true);
+  const [fitViewSignal, setFitViewSignal] = useState(0);
+  const [centerViewSignal, setCenterViewSignal] = useState(0);
 
   const selectedFurniture =
     selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) ?? null : null;
@@ -252,12 +340,12 @@ export default function App() {
 
     const instanceId = createId('furniture');
     const offset = design.canvas.gridSize;
-    const nextFurniture: FurnitureInstance = {
+    const nextFurniture: FurnitureInstance = normalizeFurnitureInstance({
       ...structuredClone(furnitureClipboard),
       instanceId,
       x: furnitureClipboard.x + offset,
       y: furnitureClipboard.y + offset
-    };
+    });
 
     commitChange(
       (current) => ({
@@ -387,6 +475,8 @@ export default function App() {
 
   const applyTemplate = (template: DesignTemplate) => {
     commitChange(() => cloneTemplateDesign(template), null);
+    setImportWizardOpen(false);
+    setRecognitionPreview(null);
     setZoom(0.82);
     setStagePosition({ x: 48, y: 48 });
     setStatusText(`已应用${template.name}`);
@@ -394,6 +484,8 @@ export default function App() {
 
   const handleNew = () => {
     commitChange(() => createEmptyDesign(), null);
+    setImportWizardOpen(false);
+    setRecognitionPreview(null);
     setMode('wall');
     setZoom(0.82);
     setStagePosition({ x: 48, y: 48 });
@@ -418,6 +510,8 @@ export default function App() {
     setFuture([]);
     setDesign(storedDesign);
     setSelection(null);
+    setImportWizardOpen(false);
+    setRecognitionPreview(null);
     setStatusText(`已打开${storedDesign.name}`);
   };
 
@@ -455,15 +549,38 @@ export default function App() {
     setStatusText('已导出 3D 效果图');
   };
 
+  const toggleFurnitureFavorite = (id: string) => {
+    commitChange((current) => {
+      const favoriteIds = new Set(current.favoriteFurnitureIds ?? []);
+      const favorite = !favoriteIds.has(id);
+
+      if (favorite) {
+        favoriteIds.add(id);
+      } else {
+        favoriteIds.delete(id);
+      }
+
+      return {
+        ...current,
+        favoriteFurnitureIds: Array.from(favoriteIds),
+        furniture: current.furniture.map((item) => (item.id === id ? { ...item, favorite } : item))
+      };
+    });
+    setStatusText('已更新家具收藏');
+  };
+
   const handleFurnitureDragStart = (item: FurnitureDefinition) => {
     setDraggedFurnitureId(item.id);
   };
 
   const handleBackgroundUpload = async (file: File) => {
     const backgroundImage = await createBackgroundImage(file, design.canvas.width, design.canvas.height);
-    commitChange((current) => ({ ...current, backgroundImage }), null);
-    setMode('calibrate');
-    setStatusText('已上传户型图，请用标定工具点选两点');
+    commitChange((current) => ({ ...current, backgroundImage, recognition: undefined }), null);
+    setRecognitionPreview(null);
+    setImportWizardOpen(true);
+    setMode('select');
+    setViewMode('plan');
+    setStatusText('已上传户型图，请在导入向导中选择处理方式');
   };
 
   const startCalibration = () => {
@@ -490,7 +607,7 @@ export default function App() {
     }
 
     setRecognizingFloorplan(true);
-    setStatusText('正在识别户型图墙体');
+    setStatusText('正在生成识别预览');
 
     try {
       const result = await recognizeFloorplanWalls(design.backgroundImage, { gridSize: design.canvas.gridSize });
@@ -500,31 +617,99 @@ export default function App() {
         return;
       }
 
-      commitChange(
-        (current) => ({
-          ...current,
-          walls: result.walls,
-          openings: [],
-          rooms: [],
-          backgroundImage: current.backgroundImage
-            ? {
-                ...current.backgroundImage,
-                visible: true,
-                locked: true,
-                opacity: Math.min(current.backgroundImage.opacity, 0.42)
-              }
-            : current.backgroundImage
-        }),
-        null
-      );
+      setRecognitionPreview(createRecognitionSession(result, design.backgroundImage, design.canvas.gridSize));
+      setImportWizardOpen(false);
       setMode('select');
       setViewMode('plan');
-      setStatusText(`已自动生成 ${result.walls.length} 面墙，可继续手动调整`);
+      setStatusText(`已生成 ${result.walls.length} 面墙的识别预览，请确认后写入方案`);
     } catch {
       setStatusText('自动识别失败，请换更清晰的户型图后重试');
     } finally {
       setRecognizingFloorplan(false);
     }
+  };
+
+  const keepBackgroundAsReference = () => {
+    setRecognitionPreview(null);
+    setImportWizardOpen(false);
+    setMode('calibrate');
+    setViewMode('plan');
+    setStatusText('已保留底图作为参考，可继续标定比例或手动画墙');
+  };
+
+  const confirmRecognitionPreview = () => {
+    if (!recognitionPreview) {
+      return;
+    }
+
+    const confirmedRecognition: RecognitionSession = {
+      ...recognitionPreview,
+      status: 'confirmed',
+      wallCount: recognitionPreview.walls.length
+    };
+
+    commitChange(
+      (current) => ({
+        ...current,
+        walls: confirmedRecognition.walls,
+        openings: [],
+        rooms: [],
+        recognition: confirmedRecognition,
+        backgroundImage: current.backgroundImage
+          ? {
+              ...current.backgroundImage,
+              visible: true,
+              locked: true,
+              opacity: Math.min(current.backgroundImage.opacity, 0.42)
+            }
+          : current.backgroundImage
+      }),
+      null
+    );
+    setRecognitionPreview(null);
+    setImportWizardOpen(false);
+    setMode('select');
+    setViewMode('plan');
+    setStatusText(`已写入 ${confirmedRecognition.walls.length} 面墙，可继续删除误识别墙或补墙`);
+  };
+
+  const discardRecognitionPreview = () => {
+    setRecognitionPreview(null);
+    setImportWizardOpen(false);
+    setStatusText('已放弃识别预览，底图仍保留用于手动绘制');
+  };
+
+  const mergeRecognitionPreviewWalls = () => {
+    setRecognitionPreview((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const walls = mergeRecognitionWalls(current.walls, design.canvas.gridSize);
+      setStatusText(`已合并为 ${walls.length} 面预览墙体`);
+      return {
+        ...current,
+        walls,
+        wallCount: walls.length
+      };
+    });
+  };
+
+  const removeShortRecognitionPreviewWalls = () => {
+    setRecognitionPreview((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const minLength = current.parameters.minWallLength * 1.15;
+      const walls = current.walls.filter((wall) => getWallLength(wall) >= minLength);
+      setStatusText(`已过滤短墙，剩余 ${walls.length} 面预览墙体`);
+      return {
+        ...current,
+        walls,
+        wallCount: walls.length
+      };
+    });
   };
 
   const modeText =
@@ -547,6 +732,9 @@ export default function App() {
         canRedo={future.length > 0}
         zoom={zoom}
         viewMode={viewMode}
+        showGrid={showGrid}
+        hasBackground={Boolean(design.backgroundImage)}
+        backgroundVisible={Boolean(design.backgroundImage?.visible)}
         onRename={(name) => commitChange((current) => ({ ...current, name }))}
         onNew={handleNew}
         onSave={handleSave}
@@ -555,6 +743,17 @@ export default function App() {
         onExportJson={exportJson}
         onExport3DPng={exportThreeDPng}
         onViewModeChange={setViewMode}
+        onFitView={() => setFitViewSignal((value) => value + 1)}
+        onCenterView={() => setCenterViewSignal((value) => value + 1)}
+        onToggleGrid={() => setShowGrid((value) => !value)}
+        onToggleBackground={() =>
+          commitChange((current) => ({
+            ...current,
+            backgroundImage: current.backgroundImage
+              ? { ...current.backgroundImage, visible: !current.backgroundImage.visible }
+              : current.backgroundImage
+          }))
+        }
         onUndo={undo}
         onRedo={redo}
         onZoomIn={() => setZoom((value) => Math.min(2.5, value + 0.1))}
@@ -574,12 +773,16 @@ export default function App() {
           mode={mode}
           activeCategory={activeCategory}
           searchText={searchText}
+          usedFurnitureIds={Array.from(new Set(design.furniture.map((item) => item.id)))}
+          favoriteFurnitureIds={design.favoriteFurnitureIds ?? []}
+          recommendedRoomNames={design.rooms.map((room) => room.name)}
           onModeChange={setMode}
           onApplyTemplate={applyTemplate}
           onBackgroundUpload={handleBackgroundUpload}
           onCategoryChange={setActiveCategory}
           onSearchChange={setSearchText}
           onFurnitureDragStart={handleFurnitureDragStart}
+          onToggleFurnitureFavorite={toggleFurnitureFavorite}
         />
         <div className="center-pane">
           <button
@@ -609,6 +812,10 @@ export default function App() {
               zoom={zoom}
               stagePosition={stagePosition}
               draggedFurnitureId={draggedFurnitureId}
+              recognitionPreview={recognitionPreview}
+              showGrid={showGrid}
+              fitViewSignal={fitViewSignal}
+              centerViewSignal={centerViewSignal}
               onSelectionChange={setSelection}
               onCommitChange={commitChange}
               onDraftStart={beginDraft}
@@ -642,7 +849,14 @@ export default function App() {
           onDelete={deleteSelection}
           onStartCalibration={startCalibration}
           onRecognizeFloorplan={recognizeFloorplan}
+          onKeepBackgroundReference={keepBackgroundAsReference}
+          onConfirmRecognitionPreview={confirmRecognitionPreview}
+          onDiscardRecognitionPreview={discardRecognitionPreview}
+          onMergeRecognitionPreviewWalls={mergeRecognitionPreviewWalls}
+          onRemoveShortRecognitionPreviewWalls={removeShortRecognitionPreviewWalls}
           recognizingFloorplan={recognizingFloorplan}
+          importWizardOpen={importWizardOpen}
+          recognitionPreview={recognitionPreview}
         />
       </div>
     </div>

@@ -22,6 +22,7 @@ export type FloorplanRecognitionResult = {
   walls: Wall[];
   horizontalCount: number;
   verticalCount: number;
+  minWallLength: number;
 };
 
 const DARK_LUMA_THRESHOLD = 112;
@@ -301,6 +302,7 @@ export const recognizeFloorplanWalls = async (
   return {
     walls,
     horizontalCount: horizontalBands.length,
-    verticalCount: verticalBands.length
+    verticalCount: verticalBands.length,
+    minWallLength
   };
 };

@@ -1,8 +1,34 @@
 import * as THREE from 'three';
-import type { DesignDocument, FurnitureInstance, Opening, Point, Wall } from '../types';
+import type { DesignDocument, FurnitureInstance, Opening, Point, RenderSettings, Wall } from '../types';
+import { DEFAULT_RENDER_SETTINGS } from './designMigration';
 
 const WALL_HEIGHT_METERS = 2.8;
 const MIN_WALL_THICKNESS_METERS = 0.08;
+
+const MATERIAL_PRESETS: Record<
+  RenderSettings['materialMode'],
+  {
+    wall: string;
+    floor: string;
+    roughness: number;
+  }
+> = {
+  clean: {
+    wall: '#f2efe8',
+    floor: '#d8c7aa',
+    roughness: 0.78
+  },
+  warm: {
+    wall: '#f3eadc',
+    floor: '#caa77b',
+    roughness: 0.72
+  },
+  contrast: {
+    wall: '#e7e9e6',
+    floor: '#8f9c91',
+    roughness: 0.68
+  }
+};
 
 type PlanBounds = {
   minX: number;
@@ -24,26 +50,19 @@ const pointToWorld = (point: Point, bounds: PlanBounds, scalePxPerMeter: number)
 const getWallAngle = (wall: Wall) => Math.atan2(wall.end.y - wall.start.y, wall.end.x - wall.start.x);
 
 const getFurnitureHeightMeters = (furniture: FurnitureInstance) => {
+  if (furniture.height) {
+    return furniture.height;
+  }
+
   if (furniture.shape === 'bed') {
     return 0.45;
   }
 
-  if (furniture.shape === 'sofa') {
-    return 0.75;
-  }
-
-  if (furniture.shape === 'cabinet' || furniture.shape === 'storage') {
-    return 0.9;
-  }
-
-  if (furniture.shape === 'sanitary') {
-    return 0.55;
-  }
-
-  if (furniture.shape === 'appliance') {
-    return 1.2;
-  }
-
+  if (furniture.shape === 'sofa') return 0.75;
+  if (furniture.shape === 'cabinet') return 0.9;
+  if (furniture.shape === 'storage') return 2.1;
+  if (furniture.shape === 'sanitary') return 0.55;
+  if (furniture.shape === 'appliance') return 1.2;
   return 0.72;
 };
 
@@ -86,13 +105,21 @@ const collectPlanBounds = (design: DesignDocument): PlanBounds => {
   };
 };
 
-const createWallMesh = (wall: Wall, bounds: PlanBounds, scalePxPerMeter: number) => {
+const resolveRenderSettings = (design: DesignDocument): RenderSettings => ({
+  ...DEFAULT_RENDER_SETTINGS,
+  ...design.renderSettings
+});
+
+const createWallMesh = (wall: Wall, bounds: PlanBounds, scalePxPerMeter: number, settings: RenderSettings) => {
   const start = pointToWorld(wall.start, bounds, scalePxPerMeter);
   const end = pointToWorld(wall.end, bounds, scalePxPerMeter);
   const length = Math.hypot(end.x - start.x, end.z - start.z);
   const thickness = Math.max(pxToMeters(wall.thickness, scalePxPerMeter), MIN_WALL_THICKNESS_METERS);
   const geometry = new THREE.BoxGeometry(length, WALL_HEIGHT_METERS, thickness);
-  const material = new THREE.MeshStandardMaterial({ color: '#303642', roughness: 0.72 });
+  const material = new THREE.MeshStandardMaterial({
+    color: settings.wallMaterial || MATERIAL_PRESETS[settings.materialMode].wall,
+    roughness: MATERIAL_PRESETS[settings.materialMode].roughness
+  });
   const mesh = new THREE.Mesh(geometry, material);
 
   mesh.position.set((start.x + end.x) / 2, WALL_HEIGHT_METERS / 2, (start.z + end.z) / 2);
@@ -125,15 +152,15 @@ const createOpeningMesh = (opening: Opening, bounds: PlanBounds, design: DesignD
   return mesh;
 };
 
-const createFurnitureMesh = (furniture: FurnitureInstance, bounds: PlanBounds, scalePxPerMeter: number) => {
+const createFurnitureMesh = (furniture: FurnitureInstance, bounds: PlanBounds, scalePxPerMeter: number, settings: RenderSettings) => {
   const point = pointToWorld({ x: furniture.x, y: furniture.y }, bounds, scalePxPerMeter);
   const width = furniture.width / 100;
   const depth = furniture.depth / 100;
   const height = getFurnitureHeightMeters(furniture);
   const material = new THREE.MeshStandardMaterial({
     color: furniture.color,
-    roughness: 0.64,
-    metalness: furniture.shape === 'appliance' ? 0.08 : 0
+    roughness: settings.materialMode === 'contrast' ? 0.52 : 0.64,
+    metalness: furniture.material === '金属' || furniture.shape === 'appliance' ? 0.12 : 0
   });
   const geometry =
     furniture.shape === 'round'
@@ -149,9 +176,12 @@ const createFurnitureMesh = (furniture: FurnitureInstance, bounds: PlanBounds, s
   return mesh;
 };
 
-const createGroundMesh = (bounds: PlanBounds) => {
+const createGroundMesh = (bounds: PlanBounds, settings: RenderSettings) => {
   const geometry = new THREE.PlaneGeometry(bounds.widthMeters, bounds.depthMeters);
-  const material = new THREE.MeshStandardMaterial({ color: '#f4f6f1', roughness: 0.85 });
+  const material = new THREE.MeshStandardMaterial({
+    color: settings.floorMaterial || MATERIAL_PRESETS[settings.materialMode].floor,
+    roughness: MATERIAL_PRESETS[settings.materialMode].roughness
+  });
   const mesh = new THREE.Mesh(geometry, material);
 
   mesh.rotation.x = -Math.PI / 2;
@@ -161,14 +191,59 @@ const createGroundMesh = (bounds: PlanBounds) => {
   return mesh;
 };
 
+const createBackgroundReferenceMesh = (design: DesignDocument, bounds: PlanBounds) => {
+  const backgroundImage = design.backgroundImage;
+
+  if (!backgroundImage?.visible || !design.renderSettings?.showBackgroundIn3D) {
+    return null;
+  }
+
+  const loader = new THREE.TextureLoader();
+  const texture = loader.load(backgroundImage.dataUrl);
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const width = pxToMeters(backgroundImage.width, design.canvas.scalePxPerMeter);
+  const depth = pxToMeters(backgroundImage.height, design.canvas.scalePxPerMeter);
+  const center = pointToWorld(
+    {
+      x: backgroundImage.x + backgroundImage.width / 2,
+      y: backgroundImage.y + backgroundImage.height / 2
+    },
+    bounds,
+    design.canvas.scalePxPerMeter
+  );
+  const geometry = new THREE.PlaneGeometry(width, depth);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    opacity: Math.min(backgroundImage.opacity, 0.42),
+    depthWrite: false
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(center.x, 0.004, center.z);
+
+  return mesh;
+};
+
 export const buildThreeDesignScene = (design: DesignDocument) => {
   const bounds = collectPlanBounds(design);
+  const settings = resolveRenderSettings(design);
   const group = new THREE.Group();
 
-  group.add(createGroundMesh(bounds));
-  design.walls.forEach((wall) => group.add(createWallMesh(wall, bounds, design.canvas.scalePxPerMeter)));
+  group.add(createGroundMesh(bounds, settings));
+  const backgroundReference = createBackgroundReferenceMesh(design, bounds);
+
+  if (backgroundReference) {
+    group.add(backgroundReference);
+  }
+
+  design.walls.forEach((wall) => group.add(createWallMesh(wall, bounds, design.canvas.scalePxPerMeter, settings)));
   design.openings.forEach((opening) => group.add(createOpeningMesh(opening, bounds, design)));
-  design.furniture.forEach((furniture) => group.add(createFurnitureMesh(furniture, bounds, design.canvas.scalePxPerMeter)));
+  design.furniture.forEach((furniture) =>
+    group.add(createFurnitureMesh(furniture, bounds, design.canvas.scalePxPerMeter, settings))
+  );
 
   return {
     group,

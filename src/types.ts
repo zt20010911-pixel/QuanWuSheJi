@@ -7,6 +7,8 @@ export type ToolMode = 'select' | 'wall' | 'door' | 'window' | 'pan' | 'calibrat
 
 export type ViewMode = 'plan' | 'threeD';
 
+export const DESIGN_DOCUMENT_VERSION = 2;
+
 export type Selection =
   | { type: 'wall'; id: string }
   | { type: 'opening'; id: string }
@@ -51,6 +53,10 @@ export type FurnitureDefinition = {
   name: string;
   width: number;
   depth: number;
+  height?: number;
+  material?: string;
+  favorite?: boolean;
+  recommendedRooms?: string[];
   color: string;
   accentColor: string;
   shape: FurnitureShape;
@@ -92,7 +98,52 @@ export type BackgroundImage = {
   calibration?: BackgroundImageCalibration;
 };
 
+export type RecognitionStatus = 'draft' | 'confirmed';
+
+export type RecognitionSession = {
+  id: string;
+  createdAt: string;
+  sourceFileName: string;
+  status: RecognitionStatus;
+  walls: Wall[];
+  wallCount: number;
+  horizontalCount: number;
+  verticalCount: number;
+  confidence: '低' | '中' | '高';
+  parameters: {
+    gridSize: number;
+    minWallLength: number;
+  };
+};
+
+export type RenderLightMode = 'daylight' | 'warm' | 'studio';
+
+export type RenderCameraPreset = 'overview' | 'corner' | 'front';
+
+export type RenderMaterialMode = 'clean' | 'warm' | 'contrast';
+
+export type RenderSettings = {
+  cameraPreset: RenderCameraPreset;
+  lightMode: RenderLightMode;
+  materialMode: RenderMaterialMode;
+  wallMaterial: string;
+  floorMaterial: string;
+  showBackgroundIn3D: boolean;
+};
+
+export type CloudTaskDraft = {
+  id: string;
+  kind: 'ai-render';
+  status: 'draft' | 'idle';
+  createdAt: string;
+  inputDesignId: string;
+  inputSnapshot?: DesignDocument;
+  resultUrl?: string;
+  note?: string;
+};
+
 export type DesignDocument = {
+  version?: number;
   id: string;
   name: string;
   updatedAt: string;
@@ -108,6 +159,10 @@ export type DesignDocument = {
   furniture: FurnitureInstance[];
   rooms: RoomLabel[];
   backgroundImage?: BackgroundImage;
+  recognition?: RecognitionSession;
+  renderSettings?: RenderSettings;
+  cloudTasks?: CloudTaskDraft[];
+  favoriteFurnitureIds?: string[];
 };
 
 export type DesignTemplate = {

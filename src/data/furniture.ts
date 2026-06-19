@@ -15,7 +15,31 @@ export const FURNITURE_CATEGORIES = [
   '灯饰'
 ];
 
-export const FURNITURE_LIBRARY: FurnitureDefinition[] = [
+const getFurnitureHeight = (item: FurnitureDefinition) => {
+  if (item.shape === 'bed' || item.shape === 'sofa') return 0.55;
+  if (item.shape === 'dining' || item.shape === 'desk') return 0.75;
+  if (item.shape === 'storage') return 2.1;
+  if (item.shape === 'cabinet' || item.category === '厨房') return 0.9;
+  if (item.shape === 'appliance') return 1.5;
+  if (item.shape === 'sanitary') return 0.65;
+  return 0.45;
+};
+
+const getFurnitureMaterial = (item: FurnitureDefinition) => {
+  if (item.category === '卫浴') return '陶瓷';
+  if (item.category === '灯饰') return '金属';
+  if (item.shape === 'sofa' || item.shape === 'bed') return '布艺';
+  if (item.shape === 'appliance') return '金属';
+  return '木饰面';
+};
+
+const getRecommendedRooms = (item: FurnitureDefinition) => {
+  if (item.category === '收纳') return ['卧室', '玄关', '阳台'];
+  if (item.category === '灯饰') return ['客厅', '卧室', '餐厅'];
+  return [item.category];
+};
+
+const BASE_FURNITURE_LIBRARY: FurnitureDefinition[] = [
   { id: 'living-sofa-3', category: '客厅', name: '三人沙发', width: 210, depth: 90, color: '#d6e6f2', accentColor: '#4b86a8', shape: 'sofa' },
   { id: 'living-sofa-l', category: '客厅', name: 'L 型沙发', width: 260, depth: 170, color: '#d9ead3', accentColor: '#5d8b57', shape: 'sofa' },
   { id: 'living-coffee-table', category: '客厅', name: '茶几', width: 120, depth: 60, color: '#f4e4c1', accentColor: '#b0844d', shape: 'rect' },
@@ -62,3 +86,10 @@ export const FURNITURE_LIBRARY: FurnitureDefinition[] = [
   { id: 'light-pendant', category: '灯饰', name: '吊灯', width: 80, depth: 80, color: '#ffe8a8', accentColor: '#bc8b28', shape: 'round' },
   { id: 'light-floor', category: '灯饰', name: '落地灯', width: 45, depth: 45, color: '#f7e5b0', accentColor: '#a9812a', shape: 'round' }
 ];
+
+export const FURNITURE_LIBRARY: FurnitureDefinition[] = BASE_FURNITURE_LIBRARY.map((item) => ({
+  ...item,
+  height: item.height ?? getFurnitureHeight(item),
+  material: item.material ?? getFurnitureMaterial(item),
+  recommendedRooms: item.recommendedRooms ?? getRecommendedRooms(item)
+}));

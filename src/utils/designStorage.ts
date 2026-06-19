@@ -1,4 +1,5 @@
 import type { DesignDocument } from '../types';
+import { normalizeDesign } from './designMigration';
 
 const DB_NAME = 'whole-home-designer';
 const DB_VERSION = 1;
@@ -29,7 +30,7 @@ const requestToPromise = <T>(request: IDBRequest<T>) =>
 export const saveDesign = async (design: DesignDocument) => {
   const database = await openDatabase();
   const documentToSave = {
-    ...design,
+    ...normalizeDesign(design),
     updatedAt: new Date().toISOString()
   };
 
@@ -49,7 +50,7 @@ export const getDesign = async (id: string) => {
   const transaction = database.transaction(STORE_NAME, 'readonly');
   const design = await requestToPromise<DesignDocument | undefined>(transaction.objectStore(STORE_NAME).get(id));
   database.close();
-  return design;
+  return design ? normalizeDesign(design) : undefined;
 };
 
 export const listDesigns = async () => {
@@ -58,5 +59,5 @@ export const listDesigns = async () => {
   const designs = await requestToPromise<DesignDocument[]>(transaction.objectStore(STORE_NAME).getAll());
   database.close();
 
-  return designs.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return designs.map(normalizeDesign).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 };
