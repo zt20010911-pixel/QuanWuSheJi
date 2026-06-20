@@ -1,4 +1,11 @@
-import { DESIGN_DOCUMENT_VERSION, type DesignDocument, type FurnitureInstance, type RenderSettings } from '../types';
+import {
+  DESIGN_DOCUMENT_VERSION,
+  type DesignDocument,
+  type FurnitureInstance,
+  type RecognitionWall,
+  type RenderSettings,
+  type Wall
+} from '../types';
 
 export const DEFAULT_RENDER_SETTINGS: RenderSettings = {
   cameraPreset: 'overview',
@@ -34,6 +41,17 @@ export const normalizeFurnitureInstance = (furniture: FurnitureInstance): Furnit
   favorite: furniture.favorite ?? false
 });
 
+export const normalizeRecognitionWall = (wall: Wall | RecognitionWall): RecognitionWall => {
+  const recognitionWall = wall as RecognitionWall;
+
+  return {
+    ...wall,
+    status: recognitionWall.status ?? 'active',
+    promotedWallId: recognitionWall.promotedWallId,
+    updatedAt: recognitionWall.updatedAt
+  };
+};
+
 export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
   ...design,
   version: DESIGN_DOCUMENT_VERSION,
@@ -45,7 +63,12 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
   recognition: design.recognition
     ? {
         ...design.recognition,
-        wallCount: design.recognition.wallCount ?? design.recognition.walls.length,
+        visible: design.recognition.visible ?? true,
+        opacity: design.recognition.opacity ?? 0.72,
+        locked: design.recognition.locked ?? false,
+        selectedWallIds: design.recognition.selectedWallIds ?? [],
+        walls: design.recognition.walls.map(normalizeRecognitionWall),
+        wallCount: design.recognition.walls.map(normalizeRecognitionWall).filter((wall) => wall.status !== 'deleted').length,
         confidence: design.recognition.confidence ?? '中',
         parameters: {
           gridSize: design.recognition.parameters?.gridSize ?? design.canvas.gridSize,

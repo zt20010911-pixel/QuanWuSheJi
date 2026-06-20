@@ -3,14 +3,15 @@ export type Point = {
   y: number;
 };
 
-export type ToolMode = 'select' | 'wall' | 'door' | 'window' | 'pan' | 'calibrate';
+export type ToolMode = 'select' | 'wall' | 'door' | 'window' | 'pan' | 'calibrate' | 'recognition-wall';
 
 export type ViewMode = 'plan' | 'threeD';
 
-export const DESIGN_DOCUMENT_VERSION = 2;
+export const DESIGN_DOCUMENT_VERSION = 3;
 
 export type Selection =
   | { type: 'wall'; id: string }
+  | { type: 'recognitionWall'; id: string }
   | { type: 'opening'; id: string }
   | { type: 'furniture'; id: string }
   | { type: 'room'; id: string };
@@ -100,12 +101,24 @@ export type BackgroundImage = {
 
 export type RecognitionStatus = 'draft' | 'confirmed';
 
+export type RecognitionWallStatus = 'active' | 'deleted' | 'promoted';
+
+export type RecognitionWall = Wall & {
+  status: RecognitionWallStatus;
+  promotedWallId?: string;
+  updatedAt?: string;
+};
+
 export type RecognitionSession = {
   id: string;
   createdAt: string;
   sourceFileName: string;
   status: RecognitionStatus;
-  walls: Wall[];
+  visible: boolean;
+  opacity: number;
+  locked: boolean;
+  selectedWallIds: string[];
+  walls: RecognitionWall[];
   wallCount: number;
   horizontalCount: number;
   verticalCount: number;

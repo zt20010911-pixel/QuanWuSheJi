@@ -1,4 +1,4 @@
-import { Check, Home, Image as ImageIcon, RotateCw, Ruler, Trash2, Wand2, X } from 'lucide-react';
+import { Home, Image as ImageIcon, RotateCw, Ruler, Trash2, Wand2, X } from 'lucide-react';
 import type {
   BackgroundImage,
   DesignDocument,
@@ -20,13 +20,18 @@ type PropertiesPanelProps = {
   onStartCalibration: () => void;
   onRecognizeFloorplan: () => void;
   onKeepBackgroundReference: () => void;
-  onConfirmRecognitionPreview: () => void;
-  onDiscardRecognitionPreview: () => void;
-  onMergeRecognitionPreviewWalls: () => void;
-  onRemoveShortRecognitionPreviewWalls: () => void;
+  onSelectAllRecognitionWalls: () => void;
+  onClearRecognitionSelection: () => void;
+  onDeleteSelectedRecognitionWalls: () => void;
+  onRestoreDeletedRecognitionWalls: () => void;
+  onMergeSelectedRecognitionWalls: () => void;
+  onMergeAllRecognitionWalls: () => void;
+  onPromoteSelectedRecognitionWalls: () => void;
+  onPromoteAllRecognitionWalls: () => void;
+  onDiscardRecognitionLayer: () => void;
   recognizingFloorplan: boolean;
   importWizardOpen: boolean;
-  recognitionPreview: RecognitionSession | null;
+  recognitionLayer: RecognitionSession | null;
 };
 
 const numberValue = (value: string) => Number.parseFloat(value) || 0;
@@ -45,13 +50,18 @@ export default function PropertiesPanel({
   onStartCalibration,
   onRecognizeFloorplan,
   onKeepBackgroundReference,
-  onConfirmRecognitionPreview,
-  onDiscardRecognitionPreview,
-  onMergeRecognitionPreviewWalls,
-  onRemoveShortRecognitionPreviewWalls,
+  onSelectAllRecognitionWalls,
+  onClearRecognitionSelection,
+  onDeleteSelectedRecognitionWalls,
+  onRestoreDeletedRecognitionWalls,
+  onMergeSelectedRecognitionWalls,
+  onMergeAllRecognitionWalls,
+  onPromoteSelectedRecognitionWalls,
+  onPromoteAllRecognitionWalls,
+  onDiscardRecognitionLayer,
   recognizingFloorplan,
   importWizardOpen,
-  recognitionPreview
+  recognitionLayer
 }: PropertiesPanelProps) {
   const selectedWall = selection?.type === 'wall' ? design.walls.find((item) => item.id === selection.id) : undefined;
   const selectedOpening =
@@ -78,14 +88,20 @@ export default function PropertiesPanel({
         />
       )}
 
-      {recognitionPreview && (
-        <RecognitionPreviewEditor
-          recognitionPreview={recognitionPreview}
+      {recognitionLayer && (
+        <RecognitionLayerEditor
+          recognitionLayer={recognitionLayer}
           recognizingFloorplan={recognizingFloorplan}
-          onConfirm={onConfirmRecognitionPreview}
-          onDiscard={onDiscardRecognitionPreview}
-          onMerge={onMergeRecognitionPreviewWalls}
-          onRemoveShortWalls={onRemoveShortRecognitionPreviewWalls}
+          onChange={onChange}
+          onSelectAll={onSelectAllRecognitionWalls}
+          onClearSelection={onClearRecognitionSelection}
+          onDeleteSelected={onDeleteSelectedRecognitionWalls}
+          onRestoreDeleted={onRestoreDeletedRecognitionWalls}
+          onMergeSelected={onMergeSelectedRecognitionWalls}
+          onMergeAll={onMergeAllRecognitionWalls}
+          onPromoteSelected={onPromoteSelectedRecognitionWalls}
+          onPromoteAll={onPromoteAllRecognitionWalls}
+          onDiscard={onDiscardRecognitionLayer}
           onRecognizeAgain={onRecognizeFloorplan}
         />
       )}
@@ -162,7 +178,7 @@ function ImportWizardCard({
       </h2>
       <button className="primary-button" type="button" onClick={onRecognizeFloorplan} disabled={recognizingFloorplan}>
         <Wand2 size={16} />
-        {recognizingFloorplan ? '正在识别' : '清空并识别'}
+        {recognizingFloorplan ? '正在识别' : '识别到图层'}
       </button>
       <button className="secondary-button" type="button" onClick={onKeepBackgroundReference}>
         <ImageIcon size={16} />
@@ -172,46 +188,126 @@ function ImportWizardCard({
   );
 }
 
-function RecognitionPreviewEditor({
-  recognitionPreview,
+function RecognitionLayerEditor({
+  recognitionLayer,
   recognizingFloorplan,
-  onConfirm,
+  onChange,
+  onSelectAll,
+  onClearSelection,
+  onDeleteSelected,
+  onRestoreDeleted,
+  onMergeSelected,
+  onMergeAll,
+  onPromoteSelected,
+  onPromoteAll,
   onDiscard,
-  onMerge,
-  onRemoveShortWalls,
   onRecognizeAgain
 }: {
-  recognitionPreview: RecognitionSession;
+  recognitionLayer: RecognitionSession;
   recognizingFloorplan: boolean;
-  onConfirm: () => void;
+  onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+  onSelectAll: () => void;
+  onClearSelection: () => void;
+  onDeleteSelected: () => void;
+  onRestoreDeleted: () => void;
+  onMergeSelected: () => void;
+  onMergeAll: () => void;
+  onPromoteSelected: () => void;
+  onPromoteAll: () => void;
   onDiscard: () => void;
-  onMerge: () => void;
-  onRemoveShortWalls: () => void;
   onRecognizeAgain: () => void;
 }) {
+  const activeCount = recognitionLayer.walls.filter((wall) => wall.status === 'active').length;
+  const deletedCount = recognitionLayer.walls.filter((wall) => wall.status === 'deleted').length;
+  const promotedCount = recognitionLayer.walls.filter((wall) => wall.status === 'promoted').length;
+  const selectedCount = recognitionLayer.selectedWallIds.length;
+
   return (
     <div className="property-stack recognition-stack">
       <h2>
         <Wand2 size={16} />
-        识别结果
+        识别图层
       </h2>
       <div className="recognition-summary">
-        <span>{recognitionPreview.wallCount} 面预览墙体</span>
-        <span>置信度：{recognitionPreview.confidence}</span>
-        <span>
-          横向 {recognitionPreview.horizontalCount} / 纵向 {recognitionPreview.verticalCount}
-        </span>
+        <span>候选 {activeCount} 面 / 已选 {selectedCount} 面</span>
+        <span>已写入 {promotedCount} 面 / 已删除 {deletedCount} 面</span>
+        <span>置信度：{recognitionLayer.confidence}</span>
       </div>
-      <button className="primary-button" type="button" onClick={onConfirm}>
-        <Check size={16} />
-        确认写入方案
-      </button>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={recognitionLayer.visible}
+          onChange={(event) => {
+            const visible = event.target.checked;
+            onChange((current) => ({
+              ...current,
+              recognition: current.recognition ? { ...current.recognition, visible } : current.recognition
+            }));
+          }}
+        />
+        <span>显示识别层</span>
+      </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={recognitionLayer.locked}
+          onChange={(event) => {
+            const locked = event.target.checked;
+            onChange((current) => ({
+              ...current,
+              recognition: current.recognition ? { ...current.recognition, locked } : current.recognition
+            }));
+          }}
+        />
+        <span>锁定识别层</span>
+      </label>
+      <label>
+        <span>识别层透明度</span>
+        <input
+          type="range"
+          min="0.2"
+          max="1"
+          step="0.05"
+          value={recognitionLayer.opacity}
+          onChange={(event) => {
+            const opacity = numberValue(event.target.value);
+            onChange((current) => ({
+              ...current,
+              recognition: current.recognition ? { ...current.recognition, opacity } : current.recognition
+            }));
+          }}
+        />
+      </label>
       <div className="property-button-row">
-        <button className="secondary-button" type="button" onClick={onMerge}>
-          合并短墙
+        <button className="secondary-button" type="button" onClick={onSelectAll} disabled={activeCount === 0}>
+          全选
         </button>
-        <button className="secondary-button" type="button" onClick={onRemoveShortWalls}>
-          删除短墙
+        <button className="secondary-button" type="button" onClick={onClearSelection} disabled={selectedCount === 0}>
+          清空选择
+        </button>
+      </div>
+      <div className="property-button-row">
+        <button className="secondary-button" type="button" onClick={onDeleteSelected} disabled={selectedCount === 0}>
+          删除选中
+        </button>
+        <button className="secondary-button" type="button" onClick={onRestoreDeleted} disabled={deletedCount === 0}>
+          恢复删除
+        </button>
+      </div>
+      <div className="property-button-row">
+        <button className="secondary-button" type="button" onClick={onMergeSelected} disabled={selectedCount < 2}>
+          合并选中
+        </button>
+        <button className="secondary-button" type="button" onClick={onMergeAll} disabled={activeCount < 2}>
+          合并全部
+        </button>
+      </div>
+      <div className="property-button-row">
+        <button className="primary-button" type="button" onClick={onPromoteSelected} disabled={selectedCount === 0}>
+          写入选中
+        </button>
+        <button className="primary-button" type="button" onClick={onPromoteAll} disabled={activeCount === 0}>
+          写入全部
         </button>
       </div>
       <button className="secondary-button" type="button" onClick={onRecognizeAgain} disabled={recognizingFloorplan}>
@@ -220,7 +316,7 @@ function RecognitionPreviewEditor({
       </button>
       <button className="danger-button" type="button" onClick={onDiscard}>
         <X size={16} />
-        放弃预览
+        放弃识别层
       </button>
     </div>
   );
@@ -576,7 +672,7 @@ function BackgroundImageEditor({
       </button>
       <button className="secondary-button" type="button" onClick={onRecognizeFloorplan} disabled={recognizingFloorplan}>
         <Wand2 size={16} />
-        {recognizingFloorplan ? '正在识别' : '自动生成墙体'}
+        {recognizingFloorplan ? '正在识别' : '识别到图层'}
       </button>
       <button
         className="danger-button"

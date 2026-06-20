@@ -9,6 +9,7 @@ import type {
   Opening,
   Point,
   RecognitionSession,
+  RecognitionWall,
   RoomLabel,
   Selection,
   ToolMode,
@@ -31,7 +32,7 @@ type DesignerCanvasProps = {
   zoom: number;
   stagePosition: Point;
   draggedFurnitureId: string | null;
-  recognitionPreview?: RecognitionSession | null;
+  recognitionLayer?: RecognitionSession | null;
   showGrid?: boolean;
   fitViewSignal?: number;
   centerViewSignal?: number;
@@ -86,7 +87,7 @@ const extendBounds = (bounds: Bounds, x: number, y: number) => ({
   maxY: Math.max(bounds.maxY, y)
 });
 
-const getDesignBounds = (design: DesignDocument, recognitionPreview?: RecognitionSession | null) => {
+const getDesignBounds = (design: DesignDocument, recognitionLayer?: RecognitionSession | null) => {
   let bounds: Bounds = {
     minX: Number.POSITIVE_INFINITY,
     minY: Number.POSITIVE_INFINITY,
@@ -94,7 +95,10 @@ const getDesignBounds = (design: DesignDocument, recognitionPreview?: Recognitio
     maxY: Number.NEGATIVE_INFINITY
   };
 
-  const walls = recognitionPreview?.walls.length ? recognitionPreview.walls : design.walls;
+  const recognitionWalls = recognitionLayer?.visible
+    ? recognitionLayer.walls.filter((wall) => wall.status !== 'deleted')
+    : [];
+  const walls = recognitionWalls.length ? recognitionWalls : design.walls;
   walls.forEach((wall) => {
     bounds = extendBounds(bounds, wall.start.x, wall.start.y);
     bounds = extendBounds(bounds, wall.end.x, wall.end.y);
@@ -136,7 +140,7 @@ export default function DesignerCanvas({
   zoom,
   stagePosition,
   draggedFurnitureId,
-  recognitionPreview,
+  recognitionLayer,
   showGrid = true,
   fitViewSignal = 0,
   centerViewSignal = 0,
@@ -187,7 +191,7 @@ export default function DesignerCanvas({
   }, [design.canvas]);
 
   const applyViewportToBounds = (fit: boolean) => {
-    const bounds = getDesignBounds(design, recognitionPreview);
+    const bounds = getDesignBounds(design, recognitionLayer);
     const padding = 72;
     const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
     const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
@@ -290,10 +294,25 @@ export default function DesignerCanvas({
 
     if (mode === 'select') {
       onSelectionChange(null);
+
+      if (design.recognition?.selectedWallIds.length) {
+        onCommitChange((current) =>
+          current.recognition
+            ? {
+                ...current,
+                recognition: {
+                  ...current.recognition,
+                  selectedWallIds: []
+                }
+              }
+            : current
+        );
+      }
+
       return;
     }
 
-    if (mode === 'wall') {
+    if (mode === 'wall' || mode === 'recognition-wall') {
       if (!wallStart) {
         setWallStart(point);
         setWallPreview(point);
@@ -306,22 +325,66 @@ export default function DesignerCanvas({
         return;
       }
 
-      const wallId = createId('wall');
-      onCommitChange(
-        (current) => ({
-          ...current,
-          walls: [
-            ...current.walls,
-            {
-              id: wallId,
-              start: wallStart,
-              end: point,
-              thickness: 14
+      const wallId = createId(mode === 'recognition-wall' ? 'rec-wall' : 'wall');
+
+      if (mode === 'recognition-wall') {
+        const recognitionWall: RecognitionWall = {
+          id: wallId,
+          start: wallStart,
+          end: point,
+          thickness: 14,
+          status: 'active'
+        };
+
+        onCommitChange((current) => {
+          const recognition = current.recognition ?? {
+            id: createId('recognition'),
+            createdAt: new Date().toISOString(),
+            sourceFileName: '手动补墙',
+            status: 'draft' as const,
+            visible: true,
+            opacity: 0.72,
+            locked: false,
+            selectedWallIds: [],
+            walls: [],
+            wallCount: 0,
+            horizontalCount: 0,
+            verticalCount: 0,
+            confidence: '中' as const,
+            parameters: {
+              gridSize: current.canvas.gridSize,
+              minWallLength: current.canvas.gridSize * 3
             }
-          ]
-        }),
-        { type: 'wall', id: wallId }
-      );
+          };
+          const walls = [...recognition.walls, recognitionWall];
+
+          return {
+            ...current,
+            recognition: {
+              ...recognition,
+              selectedWallIds: [wallId],
+              walls,
+              wallCount: walls.filter((wall) => wall.status !== 'deleted').length
+            }
+          };
+        }, null);
+      } else {
+        onCommitChange(
+          (current) => ({
+            ...current,
+            walls: [
+              ...current.walls,
+              {
+                id: wallId,
+                start: wallStart,
+                end: point,
+                thickness: 14
+              }
+            ]
+          }),
+          { type: 'wall', id: wallId }
+        );
+      }
       setWallStart(point);
       setWallPreview(point);
       return;
@@ -441,7 +504,7 @@ export default function DesignerCanvas({
           });
         }}
         onMouseMove={() => {
-          if (mode !== 'wall' || !wallStart) {
+          if ((mode !== 'wall' && mode !== 'recognition-wall') || !wallStart) {
             return;
           }
 
@@ -492,7 +555,15 @@ export default function DesignerCanvas({
         </Layer>
 
         <Layer>
-          {recognitionPreview && <RecognitionPreviewShape recognition={recognitionPreview} />}
+          {recognitionLayer && (
+            <RecognitionLayerShape
+              design={design}
+              recognition={recognitionLayer}
+              mode={mode}
+              onSelectionChange={onSelectionChange}
+              onCommitChange={onCommitChange}
+            />
+          )}
 
           {design.rooms.map((room) => (
             <RoomLabelShape
@@ -521,10 +592,10 @@ export default function DesignerCanvas({
             />
           ))}
 
-          {wallStart && wallPreview && mode === 'wall' && (
+          {wallStart && wallPreview && (mode === 'wall' || mode === 'recognition-wall') && (
             <Line
               points={[wallStart.x, wallStart.y, wallPreview.x, wallPreview.y]}
-              stroke="#2f80ed"
+              stroke={mode === 'recognition-wall' ? '#21a67a' : '#2f80ed'}
               strokeWidth={10}
               dash={[14, 10]}
               lineCap="round"
@@ -565,20 +636,89 @@ export default function DesignerCanvas({
   );
 }
 
-function RecognitionPreviewShape({ recognition }: { recognition: RecognitionSession }) {
+function RecognitionLayerShape({
+  design,
+  recognition,
+  mode,
+  onSelectionChange,
+  onCommitChange
+}: {
+  design: DesignDocument;
+  recognition: RecognitionSession;
+  mode: ToolMode;
+  onSelectionChange: (selection: Selection | null) => void;
+  onCommitChange: (updater: (current: DesignDocument) => DesignDocument, selection?: Selection | null) => void;
+}) {
+  if (!recognition.visible) {
+    return null;
+  }
+
+  const selectedIds = new Set(recognition.selectedWallIds);
+  const visibleWalls = recognition.walls.filter((wall) => wall.status !== 'deleted');
+
   return (
-    <Group listening={false}>
-      {recognition.walls.map((wall) => (
-        <Line
-          key={wall.id}
-          points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
-          stroke="#21a67a"
-          strokeWidth={Math.max(8, wall.thickness)}
-          opacity={0.72}
-          dash={[18, 10]}
-          lineCap="round"
-        />
-      ))}
+    <Group name="recognition-layer" opacity={recognition.opacity}>
+      {visibleWalls.map((wall) => {
+        const selected = selectedIds.has(wall.id);
+        const promoted = wall.status === 'promoted';
+        const selectable = mode !== 'pan' && !recognition.locked && wall.status === 'active';
+
+        return (
+          <Group key={wall.id} listening={selectable}>
+            {selected && (
+              <Line
+                points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
+                stroke="#f2a23a"
+                strokeWidth={Math.max(14, wall.thickness + 8)}
+                opacity={0.55}
+                lineCap="round"
+                listening={false}
+              />
+            )}
+            <Line
+              points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
+              stroke={promoted ? '#6f8991' : '#21a67a'}
+              strokeWidth={Math.max(8, wall.thickness)}
+              dash={promoted ? [6, 7] : [18, 10]}
+              lineCap="round"
+              onMouseDown={(event) => {
+                if (!selectable) {
+                  return;
+                }
+
+                event.cancelBubble = true;
+                const additive = event.evt.ctrlKey || event.evt.metaKey;
+                onSelectionChange({ type: 'recognitionWall', id: wall.id });
+                onCommitChange((current) => {
+                  if (!current.recognition) {
+                    return current;
+                  }
+
+                  const currentIds = current.recognition.selectedWallIds;
+                  const selectedSet = new Set(additive ? currentIds : []);
+
+                  if (additive && selectedSet.has(wall.id)) {
+                    selectedSet.delete(wall.id);
+                  } else {
+                    selectedSet.add(wall.id);
+                  }
+
+                  return {
+                    ...current,
+                    recognition: {
+                      ...current.recognition,
+                      selectedWallIds: Array.from(selectedSet)
+                    }
+                  };
+                }, { type: 'recognitionWall', id: wall.id });
+              }}
+            />
+          </Group>
+        );
+      })}
+      {mode === 'recognition-wall' && !design.recognition && (
+        <Text x={24} y={24} text="点击画布补识别墙" fontSize={14} fill="#176b61" listening={false} />
+      )}
     </Group>
   );
 }

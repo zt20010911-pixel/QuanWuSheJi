@@ -33,7 +33,8 @@ type LeftPanelProps = {
 
 const tools: Array<{ mode: ToolMode; label: string; title: string; icon: typeof MousePointer2 }> = [
   { mode: 'select', label: '选择', title: '选择和移动对象', icon: MousePointer2 },
-  { mode: 'wall', label: '墙体', title: '绘制墙体', icon: Minus },
+  { mode: 'wall', label: '墙体', title: '绘制正式墙体', icon: Minus },
+  { mode: 'recognition-wall', label: '补墙', title: '补充识别图层墙体', icon: Ruler },
   { mode: 'door', label: '门', title: '在墙上放置门', icon: DoorOpen },
   { mode: 'window', label: '窗', title: '在墙上放置窗', icon: Square },
   { mode: 'calibrate', label: '标定', title: '用两点标定户型图比例', icon: Ruler },

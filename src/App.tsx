@@ -16,6 +16,7 @@ import type {
   FurnitureInstance,
   Point,
   RecognitionSession,
+  RecognitionWall,
   Selection,
   ToolMode,
   ViewMode,
@@ -24,7 +25,7 @@ import type {
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
 import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId } from './utils/geometry';
-import { normalizeDesign, normalizeFurnitureInstance } from './utils/designMigration';
+import { normalizeDesign, normalizeFurnitureInstance, normalizeRecognitionWall } from './utils/designMigration';
 
 const HISTORY_LIMIT = 80;
 
@@ -94,7 +95,11 @@ const createRecognitionSession = (
   backgroundImage: BackgroundImage,
   gridSize: number
 ): RecognitionSession => {
-  const wallCount = result.walls.length;
+  const walls: RecognitionWall[] = result.walls.map((wall) => ({
+    ...wall,
+    status: 'active'
+  }));
+  const wallCount = walls.length;
   const confidence = wallCount >= 12 ? '高' : wallCount >= 6 ? '中' : '低';
 
   return {
@@ -102,7 +107,11 @@ const createRecognitionSession = (
     createdAt: new Date().toISOString(),
     sourceFileName: backgroundImage.fileName,
     status: 'draft',
-    walls: result.walls,
+    visible: true,
+    opacity: 0.72,
+    locked: false,
+    selectedWallIds: [],
+    walls,
     wallCount,
     horizontalCount: result.horizontalCount,
     verticalCount: result.verticalCount,
@@ -114,11 +123,23 @@ const createRecognitionSession = (
   };
 };
 
-const mergeRecognitionWalls = (walls: Wall[], gridSize: number) => {
+const withRecognitionCounts = (recognition: RecognitionSession): RecognitionSession => {
+  const visibleWalls = recognition.walls.filter((wall) => wall.status !== 'deleted');
+  const selectableIds = new Set(visibleWalls.filter((wall) => wall.status === 'active').map((wall) => wall.id));
+
+  return {
+    ...recognition,
+    wallCount: visibleWalls.length,
+    selectedWallIds: recognition.selectedWallIds.filter((id) => selectableIds.has(id))
+  };
+};
+
+
+const mergeRecognitionWalls = (walls: RecognitionWall[], gridSize: number) => {
   const sortedWalls = walls
     .slice()
     .sort((left, right) => Number(isHorizontalWall(right)) - Number(isHorizontalWall(left)) || getWallLength(right) - getWallLength(left));
-  const merged: Wall[] = [];
+  const merged: RecognitionWall[] = [];
 
   sortedWalls.forEach((wall) => {
     const horizontal = isHorizontalWall(wall);
@@ -186,10 +207,12 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [recognizingFloorplan, setRecognizingFloorplan] = useState(false);
   const [importWizardOpen, setImportWizardOpen] = useState(false);
-  const [recognitionPreview, setRecognitionPreview] = useState<RecognitionSession | null>(null);
   const [showGrid, setShowGrid] = useState(true);
   const [fitViewSignal, setFitViewSignal] = useState(0);
   const [centerViewSignal, setCenterViewSignal] = useState(0);
+
+  const recognitionLayer = design.recognition ?? null;
+  const selectedRecognitionIds = recognitionLayer?.selectedWallIds ?? [];
 
   const selectedFurniture =
     selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) ?? null : null;
@@ -290,6 +313,31 @@ export default function App() {
   }, [design]);
 
   const deleteSelection = useCallback(() => {
+    if (selectedRecognitionIds.length > 0) {
+      const selectedIds = new Set(selectedRecognitionIds);
+
+      commitChange((current) => {
+        if (!current.recognition) {
+          return current;
+        }
+
+        return {
+          ...current,
+          recognition: withRecognitionCounts({
+            ...current.recognition,
+            selectedWallIds: [],
+            walls: current.recognition.walls.map((wall) =>
+              selectedIds.has(wall.id) && wall.status === 'active'
+                ? { ...wall, status: 'deleted', updatedAt: new Date().toISOString() }
+                : wall
+            )
+          })
+        };
+      });
+      setStatusText(`已删除 ${selectedIds.size} 面识别墙`);
+      return;
+    }
+
     if (!selection) {
       return;
     }
@@ -322,7 +370,7 @@ export default function App() {
         rooms: current.rooms.filter((room) => room.id !== selection.id)
       };
     }, null);
-  }, [commitChange, selection]);
+  }, [commitChange, selectedRecognitionIds, selection]);
 
   const copySelectedFurniture = useCallback(() => {
     if (!selectedFurniture) {
@@ -476,7 +524,6 @@ export default function App() {
   const applyTemplate = (template: DesignTemplate) => {
     commitChange(() => cloneTemplateDesign(template), null);
     setImportWizardOpen(false);
-    setRecognitionPreview(null);
     setZoom(0.82);
     setStagePosition({ x: 48, y: 48 });
     setStatusText(`已应用${template.name}`);
@@ -485,7 +532,6 @@ export default function App() {
   const handleNew = () => {
     commitChange(() => createEmptyDesign(), null);
     setImportWizardOpen(false);
-    setRecognitionPreview(null);
     setMode('wall');
     setZoom(0.82);
     setStagePosition({ x: 48, y: 48 });
@@ -511,7 +557,6 @@ export default function App() {
     setDesign(storedDesign);
     setSelection(null);
     setImportWizardOpen(false);
-    setRecognitionPreview(null);
     setStatusText(`已打开${storedDesign.name}`);
   };
 
@@ -522,7 +567,16 @@ export default function App() {
       return;
     }
 
+    const recognitionNodes = stage.find('.recognition-layer');
+    const previousVisibility = recognitionNodes.map((node) => node.visible());
+
+    recognitionNodes.forEach((node) => node.visible(false));
+    stage.draw();
+
     const dataUrl = stage.toDataURL({ pixelRatio: 2 });
+
+    recognitionNodes.forEach((node, index) => node.visible(previousVisibility[index]));
+    stage.draw();
     const link = document.createElement('a');
     link.download = `${design.name || '全屋设计'}.png`;
     link.href = dataUrl;
@@ -576,7 +630,6 @@ export default function App() {
   const handleBackgroundUpload = async (file: File) => {
     const backgroundImage = await createBackgroundImage(file, design.canvas.width, design.canvas.height);
     commitChange((current) => ({ ...current, backgroundImage, recognition: undefined }), null);
-    setRecognitionPreview(null);
     setImportWizardOpen(true);
     setMode('select');
     setViewMode('plan');
@@ -607,7 +660,7 @@ export default function App() {
     }
 
     setRecognizingFloorplan(true);
-    setStatusText('正在生成识别预览');
+    setStatusText('正在识别到独立图层');
 
     try {
       const result = await recognizeFloorplanWalls(design.backgroundImage, { gridSize: design.canvas.gridSize });
@@ -617,11 +670,27 @@ export default function App() {
         return;
       }
 
-      setRecognitionPreview(createRecognitionSession(result, design.backgroundImage, design.canvas.gridSize));
+      const recognition = createRecognitionSession(result, design.backgroundImage, design.canvas.gridSize);
+
+      commitChange(
+        (current) => ({
+          ...current,
+          recognition,
+          backgroundImage: current.backgroundImage
+            ? {
+                ...current.backgroundImage,
+                visible: true,
+                locked: true,
+                opacity: Math.min(current.backgroundImage.opacity, 0.42)
+              }
+            : current.backgroundImage
+        }),
+        null
+      );
       setImportWizardOpen(false);
       setMode('select');
       setViewMode('plan');
-      setStatusText(`已生成 ${result.walls.length} 面墙的识别预览，请确认后写入方案`);
+      setStatusText(`已识别到独立图层：${result.walls.length} 面墙，可先修正再写入正式方案`);
     } catch {
       setStatusText('自动识别失败，请换更清晰的户型图后重试');
     } finally {
@@ -630,86 +699,163 @@ export default function App() {
   };
 
   const keepBackgroundAsReference = () => {
-    setRecognitionPreview(null);
     setImportWizardOpen(false);
     setMode('calibrate');
     setViewMode('plan');
     setStatusText('已保留底图作为参考，可继续标定比例或手动画墙');
   };
 
-  const confirmRecognitionPreview = () => {
-    if (!recognitionPreview) {
+  const updateRecognitionLayer = (updater: (recognition: RecognitionSession) => RecognitionSession, statusText: string) => {
+    commitChange((current) => {
+      if (!current.recognition) {
+        return current;
+      }
+
+      return {
+        ...current,
+        recognition: withRecognitionCounts(updater(current.recognition))
+      };
+    });
+    setStatusText(statusText);
+  };
+
+  const selectAllRecognitionWalls = () => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        selectedWallIds: recognition.walls.filter((wall) => wall.status === 'active').map((wall) => wall.id)
+      }),
+      '已选中全部可写入识别墙'
+    );
+  };
+
+  const clearRecognitionSelection = () => {
+    updateRecognitionLayer((recognition) => ({ ...recognition, selectedWallIds: [] }), '已清空识别墙选择');
+  };
+
+  const deleteSelectedRecognitionWalls = () => {
+    const selectedIds = new Set(selectedRecognitionIds);
+
+    if (selectedIds.size === 0) {
       return;
     }
 
-    const confirmedRecognition: RecognitionSession = {
-      ...recognitionPreview,
-      status: 'confirmed',
-      wallCount: recognitionPreview.walls.length
-    };
-
-    commitChange(
-      (current) => ({
-        ...current,
-        walls: confirmedRecognition.walls,
-        openings: [],
-        rooms: [],
-        recognition: confirmedRecognition,
-        backgroundImage: current.backgroundImage
-          ? {
-              ...current.backgroundImage,
-              visible: true,
-              locked: true,
-              opacity: Math.min(current.backgroundImage.opacity, 0.42)
-            }
-          : current.backgroundImage
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        selectedWallIds: [],
+        walls: recognition.walls.map((wall) =>
+          selectedIds.has(wall.id) && wall.status === 'active'
+            ? { ...wall, status: 'deleted', updatedAt: new Date().toISOString() }
+            : wall
+        )
       }),
-      null
+      `已删除 ${selectedIds.size} 面识别墙`
     );
-    setRecognitionPreview(null);
-    setImportWizardOpen(false);
-    setMode('select');
-    setViewMode('plan');
-    setStatusText(`已写入 ${confirmedRecognition.walls.length} 面墙，可继续删除误识别墙或补墙`);
   };
 
-  const discardRecognitionPreview = () => {
-    setRecognitionPreview(null);
-    setImportWizardOpen(false);
-    setStatusText('已放弃识别预览，底图仍保留用于手动绘制');
+  const restoreDeletedRecognitionWalls = () => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        walls: recognition.walls.map((wall) =>
+          wall.status === 'deleted' ? { ...wall, status: 'active', updatedAt: new Date().toISOString() } : wall
+        )
+      }),
+      '已恢复删除的识别墙'
+    );
   };
 
-  const mergeRecognitionPreviewWalls = () => {
-    setRecognitionPreview((current) => {
-      if (!current) {
+  const mergeRecognitionSelection = () => {
+    const selectedIds = new Set(selectedRecognitionIds);
+
+    if (selectedIds.size < 2) {
+      setStatusText('请至少选择两面识别墙再合并');
+      return;
+    }
+
+    updateRecognitionLayer(
+      (recognition) => {
+        const selectedWalls = recognition.walls.filter((wall) => selectedIds.has(wall.id) && wall.status === 'active');
+        const mergedWalls = mergeRecognitionWalls(selectedWalls, design.canvas.gridSize).map(normalizeRecognitionWall);
+
+        return {
+          ...recognition,
+          selectedWallIds: mergedWalls.map((wall) => wall.id),
+          walls: [...recognition.walls.filter((wall) => !selectedIds.has(wall.id)), ...mergedWalls]
+        };
+      },
+      '已合并选中的识别墙'
+    );
+  };
+
+  const mergeAllRecognitionWalls = () => {
+    updateRecognitionLayer(
+      (recognition) => {
+        const activeWalls = recognition.walls.filter((wall) => wall.status === 'active');
+        const mergedWalls = mergeRecognitionWalls(activeWalls, design.canvas.gridSize).map(normalizeRecognitionWall);
+
+        return {
+          ...recognition,
+          selectedWallIds: mergedWalls.map((wall) => wall.id),
+          walls: [...recognition.walls.filter((wall) => wall.status !== 'active'), ...mergedWalls]
+        };
+      },
+      '已合并全部识别墙'
+    );
+  };
+
+  const promoteRecognitionWalls = (scope: 'selected' | 'all') => {
+    const selectedIds = new Set(selectedRecognitionIds);
+
+    commitChange((current) => {
+      if (!current.recognition) {
         return current;
       }
 
-      const walls = mergeRecognitionWalls(current.walls, design.canvas.gridSize);
-      setStatusText(`已合并为 ${walls.length} 面预览墙体`);
-      return {
-        ...current,
-        walls,
-        wallCount: walls.length
-      };
-    });
-  };
+      const sourceWalls = current.recognition.walls.filter((wall) =>
+        wall.status === 'active' && (scope === 'all' || selectedIds.has(wall.id))
+      );
 
-  const removeShortRecognitionPreviewWalls = () => {
-    setRecognitionPreview((current) => {
-      if (!current) {
+      if (sourceWalls.length === 0) {
         return current;
       }
 
-      const minLength = current.parameters.minWallLength * 1.15;
-      const walls = current.walls.filter((wall) => getWallLength(wall) >= minLength);
-      setStatusText(`已过滤短墙，剩余 ${walls.length} 面预览墙体`);
+      const promotedPairs = sourceWalls.map((wall) => ({
+        recognitionId: wall.id,
+        wall: {
+          id: createId('wall'),
+          start: wall.start,
+          end: wall.end,
+          thickness: wall.thickness,
+          roomId: wall.roomId
+        }
+      }));
+      const promotedMap = new Map(promotedPairs.map((item) => [item.recognitionId, item.wall.id]));
+      const recognition = withRecognitionCounts({
+        ...current.recognition,
+        status: 'confirmed',
+        selectedWallIds: [],
+        walls: current.recognition.walls.map((wall) =>
+          promotedMap.has(wall.id)
+            ? { ...wall, status: 'promoted', promotedWallId: promotedMap.get(wall.id), updatedAt: new Date().toISOString() }
+            : wall
+        )
+      });
+
       return {
         ...current,
-        walls,
-        wallCount: walls.length
+        walls: [...current.walls, ...promotedPairs.map((item) => item.wall)],
+        recognition
       };
     });
+    setStatusText(scope === 'all' ? '已将全部识别墙写入正式方案' : '已将选中识别墙写入正式方案');
+  };
+
+  const discardRecognitionLayer = () => {
+    commitChange((current) => ({ ...current, recognition: undefined }), null);
+    setImportWizardOpen(false);
+    setStatusText('已放弃识别图层，正式方案未受影响');
   };
 
   const modeText =
@@ -717,7 +863,9 @@ export default function App() {
       ? '3D预览'
       : mode === 'wall'
       ? '墙体绘制'
-      : mode === 'pan'
+      : mode === 'recognition-wall'
+        ? '识别补墙'
+        : mode === 'pan'
         ? '画布平移'
         : mode === 'calibrate'
           ? '比例标定'
@@ -812,7 +960,7 @@ export default function App() {
               zoom={zoom}
               stagePosition={stagePosition}
               draggedFurnitureId={draggedFurnitureId}
-              recognitionPreview={recognitionPreview}
+              recognitionLayer={recognitionLayer}
               showGrid={showGrid}
               fitViewSignal={fitViewSignal}
               centerViewSignal={centerViewSignal}
@@ -850,13 +998,18 @@ export default function App() {
           onStartCalibration={startCalibration}
           onRecognizeFloorplan={recognizeFloorplan}
           onKeepBackgroundReference={keepBackgroundAsReference}
-          onConfirmRecognitionPreview={confirmRecognitionPreview}
-          onDiscardRecognitionPreview={discardRecognitionPreview}
-          onMergeRecognitionPreviewWalls={mergeRecognitionPreviewWalls}
-          onRemoveShortRecognitionPreviewWalls={removeShortRecognitionPreviewWalls}
+          onSelectAllRecognitionWalls={selectAllRecognitionWalls}
+          onClearRecognitionSelection={clearRecognitionSelection}
+          onDeleteSelectedRecognitionWalls={deleteSelectedRecognitionWalls}
+          onRestoreDeletedRecognitionWalls={restoreDeletedRecognitionWalls}
+          onMergeSelectedRecognitionWalls={mergeRecognitionSelection}
+          onMergeAllRecognitionWalls={mergeAllRecognitionWalls}
+          onPromoteSelectedRecognitionWalls={() => promoteRecognitionWalls('selected')}
+          onPromoteAllRecognitionWalls={() => promoteRecognitionWalls('all')}
+          onDiscardRecognitionLayer={discardRecognitionLayer}
           recognizingFloorplan={recognizingFloorplan}
           importWizardOpen={importWizardOpen}
-          recognitionPreview={recognitionPreview}
+          recognitionLayer={recognitionLayer}
         />
       </div>
     </div>
