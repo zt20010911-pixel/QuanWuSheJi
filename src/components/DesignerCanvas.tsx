@@ -2,11 +2,13 @@ import type Konva from 'konva';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Arc, Circle, Ellipse, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text } from 'react-konva';
 import { FURNITURE_LIBRARY } from '../data/furniture';
+import { FURNITURE_COMBOS, resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS } from '../data/materials';
 import type {
   BackgroundImage as BackgroundImageData,
   DesignDocument,
   FurnitureInstance,
+  MaterialBrushState,
   Opening,
   Point,
   RecognitionSession,
@@ -39,6 +41,7 @@ type DesignerCanvasProps = {
   stagePosition: Point;
   draggedFurnitureId: string | null;
   recognitionLayer?: RecognitionSession | null;
+  materialBrush: MaterialBrushState;
   wallDrawMode: WallDrawMode;
   showWallLengths: boolean;
   showGrid?: boolean;
@@ -81,6 +84,39 @@ const isPointInBackground = (point: Point, backgroundImage: BackgroundImageData)
   point.x <= backgroundImage.x + backgroundImage.width &&
   point.y >= backgroundImage.y &&
   point.y <= backgroundImage.y + backgroundImage.height;
+
+const roomMaterialByBrush = {
+  floor: {
+    wood: 'floor-laminate-basic',
+    fabric: 'floor-vinyl',
+    leather: 'floor-vinyl',
+    metal: 'floor-tile-basic',
+    glass: 'floor-tile-basic',
+    stone: 'floor-tile-basic',
+    ceramic: 'floor-tile-basic',
+    plastic: 'floor-vinyl'
+  },
+  wall: {
+    wood: 'wall-wallpaper',
+    fabric: 'wall-wallpaper',
+    leather: 'wall-wallpaper',
+    metal: 'wall-latex-basic',
+    glass: 'wall-tile-kitchen',
+    stone: 'wall-tile-kitchen',
+    ceramic: 'wall-tile-kitchen',
+    plastic: 'wall-latex-basic'
+  },
+  ceiling: {
+    wood: 'ceiling-gypsum',
+    fabric: 'ceiling-latex-basic',
+    leather: 'ceiling-latex-basic',
+    metal: 'ceiling-gypsum',
+    glass: 'ceiling-gypsum',
+    stone: 'ceiling-gypsum',
+    ceramic: 'ceiling-latex-basic',
+    plastic: 'ceiling-latex-basic'
+  }
+} as const;
 
 type Bounds = {
   minX: number;
@@ -156,6 +192,7 @@ export default function DesignerCanvas({
   stagePosition,
   draggedFurnitureId,
   recognitionLayer,
+  materialBrush,
   wallDrawMode,
   showWallLengths,
   showGrid = true,
@@ -548,6 +585,100 @@ export default function DesignerCanvas({
     );
   };
 
+  const addFurnitureComboAtPoint = (comboId: string, point: Point) => {
+    const combo = FURNITURE_COMBOS.find((item) => item.id === comboId);
+
+    if (!combo) {
+      return;
+    }
+
+    const position = snapPoint(point, design.canvas.gridSize);
+    const groupId = createId('furniture-group');
+    const items = combo.items.reduce<FurnitureInstance[]>((result, comboItem) => {
+        const definition = FURNITURE_LIBRARY.find((item) => item.id === comboItem.furnitureId);
+
+        if (!definition) {
+          return result;
+        }
+
+        const itemPosition = snapPoint(
+          {
+            x: position.x + (comboItem.offsetX / 100) * design.canvas.scalePxPerMeter,
+            y: position.y + (comboItem.offsetY / 100) * design.canvas.scalePxPerMeter
+          },
+          design.canvas.gridSize
+        );
+
+        result.push({
+          ...definition,
+          instanceId: createId('furniture'),
+          x: itemPosition.x,
+          y: itemPosition.y,
+          rotation: comboItem.rotation ?? 0,
+          groupId,
+          groupName: combo.name,
+          comboDefinitionId: combo.id
+        });
+
+        return result;
+      }, []);
+
+    if (items.length === 0) {
+      return;
+    }
+
+    onCommitChange(
+      (current) => ({
+        ...current,
+        furniture: [...current.furniture, ...items]
+      }),
+      { type: 'furnitureGroup', id: groupId }
+    );
+  };
+
+  const applyFurnitureMaterial = (instanceId: string) => {
+    const material = resolveFurnitureMaterial(materialBrush.materialId);
+
+    onCommitChange((current) => ({
+      ...current,
+      furniture: current.furniture.map((item) =>
+        item.instanceId === instanceId
+          ? {
+              ...item,
+              materialId: material.id,
+              material: material.name,
+              color: material.color
+            }
+          : item
+      )
+    }));
+  };
+
+  const applyRoomZoneMaterial = (zoneId: string) => {
+    if (materialBrush.target === 'furniture') {
+      return;
+    }
+
+    const material = resolveFurnitureMaterial(materialBrush.materialId);
+    const roomMaterialId = roomMaterialByBrush[materialBrush.target][material.category];
+
+    onCommitChange((current) => ({
+      ...current,
+      roomZones: (current.roomZones ?? []).map((zone) =>
+        zone.id === zoneId
+          ? {
+              ...zone,
+              materialIds: {
+                ...DEFAULT_ROOM_ZONE_MATERIAL_IDS,
+                ...zone.materialIds,
+                [materialBrush.target]: roomMaterialId
+              }
+            }
+          : zone
+      )
+    }));
+  };
+
   const roomZoneDraftPoints = (roomZonePreview && roomZoneDraft.length ? [...roomZoneDraft, roomZonePreview] : roomZoneDraft)
     .flatMap((point) => [point.x, point.y]);
 
@@ -558,11 +689,16 @@ export default function DesignerCanvas({
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
-        const furnitureId = event.dataTransfer.getData('text/plain') || draggedFurnitureId;
+        const dragData = event.dataTransfer.getData('text/plain') || draggedFurnitureId;
         const point = getWorldPointFromClient(event.clientX, event.clientY);
 
-        if (furnitureId && point) {
-          addFurnitureAtPoint(furnitureId, point);
+        if (dragData && point) {
+          if (dragData.startsWith('combo:')) {
+            addFurnitureComboAtPoint(dragData.replace('combo:', ''), point);
+            return;
+          }
+
+          addFurnitureAtPoint(dragData.replace('furniture:', ''), point);
         }
       }}
     >
@@ -678,7 +814,14 @@ export default function DesignerCanvas({
               zone={zone}
               mode={mode}
               selected={selection?.type === 'roomZone' && selection.id === zone.id}
-              onSelect={() => onSelectionChange({ type: 'roomZone', id: zone.id })}
+              onSelect={() => {
+                if (mode === 'material-brush') {
+                  applyRoomZoneMaterial(zone.id);
+                  return;
+                }
+
+                onSelectionChange({ type: 'roomZone', id: zone.id });
+              }}
               onDraftStart={onDraftStart}
               onDraftEnd={onDraftEnd}
               onDraftChange={onDraftChange}
@@ -767,8 +910,18 @@ export default function DesignerCanvas({
               design={design}
               furniture={item}
               mode={mode}
-              selected={selection?.type === 'furniture' && selection.id === item.instanceId}
-              onSelect={() => onSelectionChange({ type: 'furniture', id: item.instanceId })}
+              selected={
+                (selection?.type === 'furniture' && selection.id === item.instanceId) ||
+                (selection?.type === 'furnitureGroup' && Boolean(item.groupId) && selection.id === item.groupId)
+              }
+              onSelect={() => {
+                if (mode === 'material-brush') {
+                  applyFurnitureMaterial(item.instanceId);
+                  return;
+                }
+
+                onSelectionChange(item.groupId ? { type: 'furnitureGroup', id: item.groupId } : { type: 'furniture', id: item.instanceId });
+              }}
               onDraftStart={onDraftStart}
               onDraftEnd={onDraftEnd}
               onDraftChange={onDraftChange}
@@ -1234,7 +1387,17 @@ function FurnitureShape({
         const point = snapPoint({ x: event.target.x(), y: event.target.y() }, design.canvas.gridSize);
         onDraftChange((current) => ({
           ...current,
-          furniture: current.furniture.map((item) => (item.instanceId === furniture.instanceId ? { ...item, ...point } : item))
+          furniture: current.furniture.map((item) => {
+            if (furniture.groupId && item.groupId === furniture.groupId) {
+              return {
+                ...item,
+                x: item.x + point.x - furniture.x,
+                y: item.y + point.y - furniture.y
+              };
+            }
+
+            return item.instanceId === furniture.instanceId ? { ...item, ...point } : item;
+          })
         }));
       }}
       onDragEnd={(event) => {
@@ -1400,7 +1563,7 @@ function RoomZoneShape({
   return (
     <Group
       draggable={mode === 'select'}
-      listening={mode === 'select'}
+      listening={mode === 'select' || mode === 'material-brush'}
       onMouseDown={(event) => {
         event.cancelBubble = true;
         onSelect();

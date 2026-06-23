@@ -1,4 +1,18 @@
-import { ClipboardList, FileSpreadsheet, FileText, Home, Image as ImageIcon, Plus, RotateCw, Ruler, Trash2, Wand2, X } from 'lucide-react';
+import {
+  Brush,
+  ClipboardList,
+  FileSpreadsheet,
+  FileText,
+  Home,
+  Image as ImageIcon,
+  Package,
+  Plus,
+  RotateCw,
+  Ruler,
+  Trash2,
+  Wand2,
+  X
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type {
   BackgroundImage,
@@ -18,6 +32,7 @@ import type {
   WallDrawMode
 } from '../types';
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS, MATERIAL_LIBRARY } from '../data/materials';
+import { FURNITURE_MATERIAL_LIBRARY, resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { ROADMAP_MODULES } from '../data/roadmap';
 import { createId, pxToMeters, resizeWallByLength, wallLengthPx } from '../utils/geometry';
 import { createEstimateItems, formatCurrency, getEstimateTotal, getRoomZoneAreaSqm } from '../utils/roomMetrics';
@@ -118,6 +133,8 @@ export default function PropertiesPanel({
     selection?.type === 'opening' ? design.openings.find((item) => item.id === selection.id) : undefined;
   const selectedFurniture =
     selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) : undefined;
+  const selectedFurnitureGroup =
+    selection?.type === 'furnitureGroup' ? design.furniture.filter((item) => item.groupId === selection.id) : [];
   const selectedRoom = selection?.type === 'room' ? design.rooms.find((item) => item.id === selection.id) : undefined;
   const selectedRoomZone = selection?.type === 'roomZone' ? (design.roomZones ?? []).find((item) => item.id === selection.id) : undefined;
   const preferredTab = useMemo(
@@ -167,6 +184,7 @@ export default function PropertiesPanel({
               onWallDrawModeChange={onWallDrawModeChange}
               onToggleWallLengths={onToggleWallLengths}
             />
+            <MaterialBrushEditor design={design} onChange={onChange} />
             <CurrentPlanSummary design={design} />
           </>
         )}
@@ -232,6 +250,9 @@ export default function PropertiesPanel({
             {selectedWall && <WallEditor design={design} wall={selectedWall} onChange={onChange} onDelete={onDelete} />}
             {selectedOpening && <OpeningEditor opening={selectedOpening} onChange={onChange} onDelete={onDelete} />}
             {selectedFurniture && <FurnitureEditor furniture={selectedFurniture} onChange={onChange} onDelete={onDelete} />}
+            {selectedFurnitureGroup.length > 0 && (
+              <FurnitureGroupEditor groupItems={selectedFurnitureGroup} design={design} onChange={onChange} onDelete={onDelete} />
+            )}
             {selectedRoom && <RoomEditor room={selectedRoom} onChange={onChange} onDelete={onDelete} />}
             {selectedRoomZone && (
               <RoomZoneEditor zone={selectedRoomZone} design={design} onChange={onChange} onDelete={onDelete} />
@@ -602,6 +623,79 @@ function EditingStateCard({
       <div className="area-reference">
         {selectedWallLength === null ? '未选中墙体' : `选中墙长：${selectedWallLength.toFixed(2)}m`}
       </div>
+    </div>
+  );
+}
+
+function MaterialBrushEditor({
+  design,
+  onChange
+}: {
+  design: DesignDocument;
+  onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const brush = design.materialBrush ?? { materialId: FURNITURE_MATERIAL_LIBRARY[0].id, target: 'furniture' as const };
+  const material = resolveFurnitureMaterial(brush.materialId);
+
+  return (
+    <div className="property-stack material-brush-stack">
+      <h2>
+        <Brush size={16} />
+        材质刷
+      </h2>
+      <label>
+        <span>当前材质</span>
+        <select
+          value={brush.materialId}
+          onChange={(event) => {
+            const materialId = event.target.value;
+            onChange((current) => ({
+              ...current,
+              materialBrush: {
+                ...(current.materialBrush ?? brush),
+                materialId
+              }
+            }));
+          }}
+        >
+          {FURNITURE_MATERIAL_LIBRARY.map((item) => (
+            <option value={item.id} key={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>应用目标</span>
+        <select
+          value={brush.target}
+          onChange={(event) => {
+            const target = event.target.value as typeof brush.target;
+            onChange((current) => ({
+              ...current,
+              materialBrush: {
+                ...(current.materialBrush ?? brush),
+                target
+              }
+            }));
+          }}
+        >
+          <option value="furniture">家具</option>
+          <option value="floor">房间地面</option>
+          <option value="wall">房间墙面</option>
+          <option value="ceiling">房间顶面</option>
+        </select>
+      </label>
+      <div className="material-brush-preview">
+        <span style={{ background: material.color }} />
+        <div>
+          <strong>{material.name}</strong>
+          <small>
+            {material.textureType} · 粗糙度 {material.roughness.toFixed(2)} · 金属度 {material.metalness.toFixed(2)}
+          </small>
+        </div>
+      </div>
+      <div className="editing-hint">切换到左侧“材质”工具后，点击家具或房间区域即可应用当前材质。</div>
     </div>
   );
 }
@@ -1385,6 +1479,93 @@ function OpeningEditor({
   );
 }
 
+function FurnitureGroupEditor({
+  groupItems,
+  design,
+  onChange,
+  onDelete
+}: {
+  groupItems: FurnitureInstance[];
+  design: DesignDocument;
+  onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+  onDelete: () => void;
+}) {
+  const groupId = groupItems[0]?.groupId ?? '';
+  const groupName = groupItems[0]?.groupName ?? '家具组合';
+  const comboFavoriteId = groupItems[0]?.comboDefinitionId ?? groupId;
+  const favorite = Boolean(comboFavoriteId && (design.favoriteFurnitureComboIds ?? []).includes(comboFavoriteId));
+
+  return (
+    <div className="property-stack furniture-group-stack">
+      <h2>
+        <Package size={16} />
+        {groupName}
+      </h2>
+      <div className="delivery-stats">
+        <span>组合数量</span>
+        <strong>{groupItems.length} 件</strong>
+        <span>占地宽深</span>
+        <strong>
+          {Math.round(Math.max(...groupItems.map((item) => item.width)))}×{Math.round(Math.max(...groupItems.map((item) => item.depth)))}cm
+        </strong>
+      </div>
+      <label>
+        <span>组合名称</span>
+        <input
+          value={groupName}
+          onChange={(event) => {
+            const nextName = event.target.value;
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) => (item.groupId === groupId ? { ...item, groupName: nextName } : item))
+            }));
+          }}
+        />
+      </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={favorite}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            onChange((current) => ({
+              ...current,
+              favoriteFurnitureComboIds: checked
+                ? Array.from(new Set([...(current.favoriteFurnitureComboIds ?? []), comboFavoriteId]))
+                : (current.favoriteFurnitureComboIds ?? []).filter((id) => id !== comboFavoriteId)
+            }));
+          }}
+        />
+        <span>收藏组合</span>
+      </label>
+      <button
+        className="secondary-button"
+        type="button"
+        onClick={() => {
+          onChange((current) => ({
+            ...current,
+            furniture: current.furniture.map((item) =>
+              item.groupId === groupId
+                ? {
+                    ...item,
+                    groupId: undefined,
+                    groupName: undefined
+                  }
+                : item
+            )
+          }));
+        }}
+      >
+        取消组合
+      </button>
+      <button className="danger-button" type="button" onClick={onDelete}>
+        <Trash2 size={16} />
+        删除组合
+      </button>
+    </div>
+  );
+}
+
 function FurnitureEditor({
   furniture,
   onChange,
@@ -1461,21 +1642,110 @@ function FurnitureEditor({
       <label>
         <span>材质</span>
         <select
-          value={furniture.material ?? '木饰面'}
+          value={furniture.materialId ?? FURNITURE_MATERIAL_LIBRARY[0].id}
           onChange={(event) => {
-            const material = event.target.value;
+            const material = resolveFurnitureMaterial(event.target.value);
             onChange((current) => ({
               ...current,
-              furniture: current.furniture.map((item) => (item.instanceId === furniture.instanceId ? { ...item, material } : item))
+              furniture: current.furniture.map((item) =>
+                item.instanceId === furniture.instanceId
+                  ? {
+                      ...item,
+                      materialId: material.id,
+                      material: material.name,
+                      color: material.color
+                    }
+                  : item
+              )
             }));
           }}
         >
-          <option value="木饰面">木饰面</option>
-          <option value="布艺">布艺</option>
-          <option value="金属">金属</option>
-          <option value="陶瓷">陶瓷</option>
-          <option value="玻璃">玻璃</option>
+          {FURNITURE_MATERIAL_LIBRARY.map((material) => (
+            <option value={material.id} key={material.id}>
+              {material.name}
+            </option>
+          ))}
         </select>
+      </label>
+      <label>
+        <span>品牌</span>
+        <input
+          value={furniture.product?.brand ?? ''}
+          onChange={(event) => {
+            const brand = event.target.value;
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) =>
+                item.instanceId === furniture.instanceId ? { ...item, product: { ...item.product, isRealProduct: item.product?.isRealProduct ?? false, brand } } : item
+              )
+            }));
+          }}
+        />
+      </label>
+      <label>
+        <span>系列</span>
+        <input
+          value={furniture.product?.series ?? ''}
+          onChange={(event) => {
+            const series = event.target.value;
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) =>
+                item.instanceId === furniture.instanceId ? { ...item, product: { ...item.product, isRealProduct: item.product?.isRealProduct ?? false, series } } : item
+              )
+            }));
+          }}
+        />
+      </label>
+      <label>
+        <span>SKU</span>
+        <input
+          value={furniture.product?.sku ?? ''}
+          onChange={(event) => {
+            const sku = event.target.value;
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) =>
+                item.instanceId === furniture.instanceId ? { ...item, product: { ...item.product, isRealProduct: item.product?.isRealProduct ?? false, sku } } : item
+              )
+            }));
+          }}
+        />
+      </label>
+      <label>
+        <span>参考价（元）</span>
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value={furniture.product?.referencePrice ?? 0}
+          onChange={(event) => {
+            const referencePrice = numberValue(event.target.value);
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) =>
+                item.instanceId === furniture.instanceId
+                  ? { ...item, product: { ...item.product, isRealProduct: item.product?.isRealProduct ?? false, referencePrice } }
+                  : item
+              )
+            }));
+          }}
+        />
+      </label>
+      <label>
+        <span>商品链接</span>
+        <input
+          value={furniture.product?.productUrl ?? ''}
+          onChange={(event) => {
+            const productUrl = event.target.value;
+            onChange((current) => ({
+              ...current,
+              furniture: current.furniture.map((item) =>
+                item.instanceId === furniture.instanceId ? { ...item, product: { ...item.product, isRealProduct: item.product?.isRealProduct ?? false, productUrl } } : item
+              )
+            }));
+          }}
+        />
       </label>
       <label className="checkbox-row">
         <input

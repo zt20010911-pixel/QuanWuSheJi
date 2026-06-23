@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS, MATERIAL_LIBRARY } from '../data/materials';
 import type { DesignDocument, FurnitureInstance, Opening, Point, RenderSettings, RoomZone, Wall } from '../types';
 import { DEFAULT_RENDER_SETTINGS } from './designMigration';
@@ -338,12 +339,15 @@ const getFurnitureHeightMeters = (furniture: FurnitureInstance) => {
   return 0.72;
 };
 
-const createFurnitureMaterial = (furniture: FurnitureInstance, settings: RenderSettings, color = furniture.color) =>
-  createStandardMaterial({
-    color,
-    roughness: settings.materialMode === 'contrast' ? 0.52 : 0.64,
-    metalness: furniture.material === '金属' || furniture.shape === 'appliance' ? 0.16 : 0.02
+const createFurnitureMaterial = (furniture: FurnitureInstance, settings: RenderSettings, color?: string) => {
+  const material = resolveFurnitureMaterial(furniture.materialId);
+
+  return createStandardMaterial({
+    color: color ?? material.color ?? furniture.color,
+    roughness: settings.materialMode === 'contrast' ? Math.max(0.3, material.roughness - 0.08) : material.roughness,
+    metalness: material.metalness
   });
+};
 
 const addBox = (
   group: THREE.Group,
@@ -389,6 +393,9 @@ const createFurnitureShape = (furniture: FurnitureInstance, settings: RenderSett
     addBox(group, [width * 0.42, 0.11, depth * 0.18], [-width * 0.24, 0.54, -depth * 0.32], accentMaterial);
     addBox(group, [width * 0.42, 0.11, depth * 0.18], [width * 0.24, 0.54, -depth * 0.32], accentMaterial);
     addBox(group, [width, 0.5, 0.08], [0, 0.45, -depth * 0.5], accentMaterial);
+    if (furniture.modelVariant === 'storage-bed') {
+      addBox(group, [width * 0.86, 0.05, depth * 0.72], [0, 0.08, depth * 0.08], accentMaterial);
+    }
     return group;
   }
 
@@ -397,6 +404,10 @@ const createFurnitureShape = (furniture: FurnitureInstance, settings: RenderSett
     addBox(group, [width, height * 0.72, depth * 0.12], [0, height * 0.48, -depth * 0.43], accentMaterial);
     addBox(group, [width * 0.08, height * 0.58, depth * 0.72], [-width * 0.46, height * 0.38, depth * 0.08], accentMaterial);
     addBox(group, [width * 0.08, height * 0.58, depth * 0.72], [width * 0.46, height * 0.38, depth * 0.08], accentMaterial);
+    if (furniture.modelVariant === 'l-sofa') {
+      addBox(group, [width * 0.42, height * 0.38, depth * 0.86], [width * 0.25, height * 0.18, depth * 0.2], mainMaterial);
+      addBox(group, [width * 0.42, height * 0.56, depth * 0.08], [width * 0.25, height * 0.36, depth * 0.62], accentMaterial);
+    }
     return group;
   }
 
@@ -414,6 +425,12 @@ const createFurnitureShape = (furniture: FurnitureInstance, settings: RenderSett
   }
 
   if (furniture.shape === 'round') {
+    if (furniture.modelVariant === 'ceiling-light' || furniture.modelVariant === 'floor-light') {
+      addCylinder(group, Math.max(width, depth) / 2, 0.08, [0, height * 0.85, 0], mainMaterial, 48);
+      addCylinder(group, Math.max(width, depth) * 0.16, height * 0.72, [0, height * 0.42, 0], accentMaterial, 32);
+      return group;
+    }
+
     addCylinder(group, Math.max(width, depth) / 2, height * 0.42, [0, height * 0.21, 0], mainMaterial, 48);
     addCylinder(group, Math.max(width, depth) * 0.42, 0.08, [0, height * 0.48, 0], accentMaterial, 48);
     return group;

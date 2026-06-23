@@ -2,12 +2,14 @@ import {
   DESIGN_DOCUMENT_VERSION,
   type DesignDocument,
   type FurnitureInstance,
+  type FurnitureProductInfo,
   type ModelExportDraft,
   type RecognitionWall,
   type RenderSettings,
   type Wall
 } from '../types';
 import { DEFAULT_ESTIMATE_SETTINGS, DEFAULT_ROOM_ZONE_MATERIAL_IDS } from '../data/materials';
+import { DEFAULT_MATERIAL_BRUSH, getDefaultFurnitureMaterialId, resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { createDefaultFeatureStates } from '../data/roadmap';
 
 export const DEFAULT_RENDER_SETTINGS: RenderSettings = {
@@ -65,12 +67,46 @@ const getDefaultFurnitureMaterial = (furniture: Pick<FurnitureInstance, 'shape' 
   return '木饰面';
 };
 
-export const normalizeFurnitureInstance = (furniture: FurnitureInstance): FurnitureInstance => ({
-  ...furniture,
-  height: furniture.height ?? getDefaultFurnitureHeight(furniture),
-  material: furniture.material ?? getDefaultFurnitureMaterial(furniture),
-  favorite: furniture.favorite ?? false
+const getDefaultFurnitureStyleTags = (furniture: Pick<FurnitureInstance, 'shape' | 'category'>) => {
+  const tags = ['现代'];
+
+  if (furniture.category === '儿童房') tags.push('儿童');
+  if (furniture.category === '收纳' || furniture.shape === 'storage') tags.push('收纳');
+  if (furniture.shape === 'sofa' || furniture.shape === 'bed') tags.push('北欧');
+  if (furniture.category === '厨房' || furniture.category === '卫浴') tags.push('实用');
+
+  return Array.from(new Set(tags));
+};
+
+const normalizeFurnitureProduct = (product?: Partial<FurnitureProductInfo>): FurnitureProductInfo => ({
+  brand: product?.brand ?? '',
+  series: product?.series ?? '',
+  sku: product?.sku ?? '',
+  referencePrice: product?.referencePrice ?? 0,
+  productUrl: product?.productUrl ?? '',
+  imageUrl: product?.imageUrl ?? '',
+  isRealProduct: product?.isRealProduct ?? false
 });
+
+export const normalizeFurnitureInstance = (furniture: FurnitureInstance): FurnitureInstance => {
+  const materialId = furniture.materialId ?? getDefaultFurnitureMaterialId(furniture);
+  const material = resolveFurnitureMaterial(materialId);
+
+  return {
+    ...furniture,
+    height: furniture.height ?? getDefaultFurnitureHeight(furniture),
+    materialId,
+    material: furniture.material ?? material.name ?? getDefaultFurnitureMaterial(furniture),
+    color: furniture.color || material.color,
+    favorite: furniture.favorite ?? false,
+    subcategory: furniture.subcategory ?? furniture.category,
+    styleTags: furniture.styleTags ?? getDefaultFurnitureStyleTags(furniture),
+    modelType: furniture.modelType ?? 'procedural',
+    modelVariant: furniture.modelVariant ?? furniture.shape,
+    materialOverrides: furniture.materialOverrides ?? {},
+    product: normalizeFurnitureProduct(furniture.product)
+  };
+};
 
 export const normalizeRecognitionWall = (wall: Wall | RecognitionWall): RecognitionWall => {
   const recognitionWall = wall as RecognitionWall;
@@ -134,6 +170,11 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
   },
   cloudTasks: design.cloudTasks ?? [],
   favoriteFurnitureIds: design.favoriteFurnitureIds ?? [],
+  favoriteFurnitureComboIds: design.favoriteFurnitureComboIds ?? [],
+  materialBrush: {
+    ...DEFAULT_MATERIAL_BRUSH,
+    ...(design.materialBrush ?? {})
+  },
   estimateSettings: {
     ...DEFAULT_ESTIMATE_SETTINGS,
     ...design.estimateSettings,

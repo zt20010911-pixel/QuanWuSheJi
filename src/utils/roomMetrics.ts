@@ -133,6 +133,25 @@ export const createEstimateItems = (design: DesignDocument): EstimateItem[] => {
     }
   }
 
+  design.furniture.forEach((furniture) => {
+    const referencePrice = furniture.product?.referencePrice ?? 0;
+
+    if (referencePrice <= 0) {
+      return;
+    }
+
+    items.push(createEstimateItem({
+      id: furniture.instanceId + '-product',
+      category: 'furniture',
+      name: furniture.product?.brand ? `${furniture.product.brand} ${furniture.name}` : furniture.name,
+      unit: '个',
+      quantity: 1,
+      unitPrice: referencePrice,
+      wasteRate: 0,
+      source: 'auto'
+    }));
+  });
+
   return [...items, ...(design.customEstimateItems ?? [])];
 };
 

@@ -1,4 +1,5 @@
 import type { FurnitureDefinition } from '../types';
+import { getDefaultFurnitureMaterialId, resolveFurnitureMaterial } from './furnitureMaterials';
 
 export const FURNITURE_CATEGORIES = [
   '全部',
@@ -37,6 +38,41 @@ const getRecommendedRooms = (item: FurnitureDefinition) => {
   if (item.category === '收纳') return ['卧室', '玄关', '阳台'];
   if (item.category === '灯饰') return ['客厅', '卧室', '餐厅'];
   return [item.category];
+};
+
+const getFurnitureSubcategory = (item: FurnitureDefinition) => {
+  if (item.shape === 'sofa') return '沙发';
+  if (item.shape === 'bed') return '床';
+  if (item.shape === 'dining') return '餐桌椅';
+  if (item.shape === 'cabinet') return '柜体';
+  if (item.shape === 'storage') return '收纳';
+  if (item.shape === 'sanitary') return '卫浴洁具';
+  if (item.shape === 'appliance') return item.category === '灯饰' ? '灯饰' : '电器';
+  if (item.shape === 'desk') return '桌台';
+  if (item.shape === 'round') return '圆形家具';
+  return item.category;
+};
+
+const getFurnitureStyleTags = (item: FurnitureDefinition) => {
+  const tags = ['现代'];
+
+  if (item.category === '儿童房') tags.push('儿童');
+  if (item.category === '收纳' || item.shape === 'storage') tags.push('收纳');
+  if (item.category === '灯饰') tags.push('轻奢');
+  if (item.shape === 'sofa' || item.shape === 'bed') tags.push('北欧');
+  if (item.category === '厨房' || item.category === '卫浴') tags.push('实用');
+
+  return Array.from(new Set(tags));
+};
+
+const getFurnitureModelVariant = (item: FurnitureDefinition) => {
+  if (item.id.includes('sofa-l')) return 'l-sofa';
+  if (item.id.includes('round')) return 'round-table';
+  if (item.category === '灯饰') return item.id.includes('floor') ? 'floor-light' : 'ceiling-light';
+  if (item.shape === 'bed') return item.id.includes('bunk') ? 'bunk-bed' : 'platform-bed';
+  if (item.shape === 'appliance') return item.id.includes('fridge') ? 'fridge' : 'appliance';
+  if (item.shape === 'sanitary') return item.id.includes('shower') ? 'shower' : 'sanitary';
+  return item.shape;
 };
 
 const BASE_FURNITURE_LIBRARY: FurnitureDefinition[] = [
@@ -84,12 +120,36 @@ const BASE_FURNITURE_LIBRARY: FurnitureDefinition[] = [
   { id: 'entry-mirror', category: '玄关', name: '穿衣镜', width: 60, depth: 10, color: '#d9e4ee', accentColor: '#668aa3', shape: 'rect' },
   { id: 'light-ceiling', category: '灯饰', name: '吸顶灯', width: 70, depth: 70, color: '#fff1ba', accentColor: '#c29d33', shape: 'round' },
   { id: 'light-pendant', category: '灯饰', name: '吊灯', width: 80, depth: 80, color: '#ffe8a8', accentColor: '#bc8b28', shape: 'round' },
-  { id: 'light-floor', category: '灯饰', name: '落地灯', width: 45, depth: 45, color: '#f7e5b0', accentColor: '#a9812a', shape: 'round' }
+  { id: 'light-floor', category: '灯饰', name: '落地灯', width: 45, depth: 45, color: '#f7e5b0', accentColor: '#a9812a', shape: 'round' },
+  { id: 'living-modular-sofa', category: '客厅', name: '模块组合沙发', width: 300, depth: 180, color: '#c9d7d0', accentColor: '#5d756b', shape: 'sofa', subcategory: '组合沙发', styleTags: ['现代', '北欧'], modelVariant: 'l-sofa' },
+  { id: 'living-glass-side-table', category: '客厅', name: '玻璃边几', width: 55, depth: 55, color: '#d6edf4', accentColor: '#5a94a6', shape: 'round', materialId: 'glass-clear', styleTags: ['轻奢', '现代'] },
+  { id: 'bedroom-storage-bed', category: '卧室', name: '收纳床', width: 180, depth: 210, color: '#d6c1a3', accentColor: '#8c6842', shape: 'bed', materialId: 'wood-walnut', styleTags: ['收纳', '现代'], modelVariant: 'storage-bed' },
+  { id: 'bedroom-open-wardrobe', category: '卧室', name: '开放衣帽柜', width: 240, depth: 60, color: '#d8c09a', accentColor: '#7e6040', shape: 'storage', materialId: 'wood-oak', styleTags: ['收纳', '现代'] },
+  { id: 'dining-rock-slab-table', category: '餐厅', name: '岩板餐桌', width: 180, depth: 90, color: '#e7e2d8', accentColor: '#8a8172', shape: 'dining', materialId: 'stone-white', styleTags: ['轻奢', '岩板'] },
+  { id: 'kitchen-island', category: '厨房', name: '中岛台', width: 200, depth: 90, color: '#e6e0d3', accentColor: '#6f7b75', shape: 'cabinet', materialId: 'stone-white', styleTags: ['现代', '实用'] },
+  { id: 'bath-smart-toilet', category: '卫浴', name: '智能马桶', width: 48, depth: 72, color: '#e8f1f2', accentColor: '#668d98', shape: 'sanitary', materialId: 'ceramic-white', styleTags: ['现代', '智能'] },
+  { id: 'study-lift-desk', category: '书房', name: '升降书桌', width: 150, depth: 70, color: '#d9d1bf', accentColor: '#5f6b6d', shape: 'desk', materialId: 'wood-oak', styleTags: ['现代', '办公'] },
+  { id: 'entry-full-height-cabinet', category: '玄关', name: '通顶玄关柜', width: 180, depth: 40, color: '#ded1bd', accentColor: '#806b52', shape: 'storage', materialId: 'wood-oak', styleTags: ['收纳', '现代'] },
+  { id: 'balcony-fold-table', category: '阳台', name: '折叠休闲桌', width: 90, depth: 55, color: '#d9e6ce', accentColor: '#718f58', shape: 'desk', materialId: 'plastic-matte', styleTags: ['休闲', '实用'] }
 ];
 
 export const FURNITURE_LIBRARY: FurnitureDefinition[] = BASE_FURNITURE_LIBRARY.map((item) => ({
   ...item,
+  subcategory: item.subcategory ?? getFurnitureSubcategory(item),
   height: item.height ?? getFurnitureHeight(item),
-  material: item.material ?? getFurnitureMaterial(item),
-  recommendedRooms: item.recommendedRooms ?? getRecommendedRooms(item)
+  materialId: item.materialId ?? getDefaultFurnitureMaterialId(item),
+  material: item.material ?? resolveFurnitureMaterial(item.materialId ?? getDefaultFurnitureMaterialId(item)).name ?? getFurnitureMaterial(item),
+  recommendedRooms: item.recommendedRooms ?? getRecommendedRooms(item),
+  styleTags: item.styleTags ?? getFurnitureStyleTags(item),
+  modelType: item.modelType ?? 'procedural',
+  modelVariant: item.modelVariant ?? getFurnitureModelVariant(item),
+  product: {
+    brand: item.product?.brand ?? '',
+    series: item.product?.series ?? '',
+    sku: item.product?.sku ?? '',
+    referencePrice: item.product?.referencePrice ?? 0,
+    productUrl: item.product?.productUrl ?? '',
+    imageUrl: item.product?.imageUrl ?? '',
+    isRealProduct: item.product?.isRealProduct ?? false
+  }
 }));

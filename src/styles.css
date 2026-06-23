@@ -468,6 +468,36 @@ button:disabled {
   color: #a76d11;
 }
 
+.furniture-combo-item {
+  border-style: dashed;
+  background: #fbf8f1;
+}
+
+.combo-swatch {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+  padding: 4px;
+  background: #fff8e8;
+  border-color: #d8a64d;
+}
+
+.combo-swatch span {
+  display: block;
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 2px;
+  background: #d8a64d;
+}
+
+.combo-swatch span:nth-child(2) {
+  background: #7ea7a0;
+}
+
+.combo-swatch span:nth-child(3) {
+  background: #b98672;
+}
+
 .center-pane {
   position: relative;
   min-width: 0;
@@ -793,6 +823,34 @@ button:disabled {
 
 .material-color-row input[type='color'] {
   padding: 3px;
+}
+
+.material-brush-preview {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #d8e2dd;
+  border-radius: 8px;
+  background: #f7faf8;
+}
+
+.material-brush-preview > span {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #adbbb4;
+  border-radius: 7px;
+}
+
+.material-brush-preview strong,
+.material-brush-preview small {
+  display: block;
+}
+
+.material-brush-preview small {
+  color: #65746d;
+  line-height: 1.45;
 }
 
 .ai-draft-button {

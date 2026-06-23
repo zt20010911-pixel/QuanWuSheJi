@@ -3,19 +3,29 @@ export type Point = {
   y: number;
 };
 
-export type ToolMode = 'select' | 'wall' | 'door' | 'window' | 'pan' | 'calibrate' | 'recognition-wall' | 'room-zone';
+export type ToolMode =
+  | 'select'
+  | 'wall'
+  | 'door'
+  | 'window'
+  | 'pan'
+  | 'calibrate'
+  | 'recognition-wall'
+  | 'room-zone'
+  | 'material-brush';
 
 export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 5;
+export const DESIGN_DOCUMENT_VERSION = 8;
 
 export type Selection =
   | { type: 'wall'; id: string }
   | { type: 'recognitionWall'; id: string }
   | { type: 'opening'; id: string }
   | { type: 'furniture'; id: string }
+  | { type: 'furnitureGroup'; id: string }
   | { type: 'room'; id: string }
   | { type: 'roomZone'; id: string };
 
@@ -51,16 +61,51 @@ export type FurnitureShape =
   | 'desk'
   | 'storage';
 
+export type FurnitureModelType = 'procedural' | 'placeholder' | 'external-draft';
+
+export type FurnitureProductInfo = {
+  brand?: string;
+  series?: string;
+  sku?: string;
+  referencePrice?: number;
+  productUrl?: string;
+  imageUrl?: string;
+  isRealProduct: boolean;
+};
+
+export type FurnitureMaterialCategory = 'wood' | 'fabric' | 'leather' | 'metal' | 'glass' | 'stone' | 'ceramic' | 'plastic';
+
+export type FurnitureMaterialDefinition = {
+  id: string;
+  name: string;
+  category: FurnitureMaterialCategory;
+  color: string;
+  textureType: 'solid' | 'grain' | 'woven' | 'gloss' | 'matte';
+  roughness: number;
+  metalness: number;
+  suitableShapes: FurnitureShape[];
+};
+
 export type FurnitureDefinition = {
   id: string;
   category: string;
+  subcategory?: string;
   name: string;
   width: number;
   depth: number;
   height?: number;
   material?: string;
+  materialId?: string;
+  materialOverrides?: Record<string, string>;
   favorite?: boolean;
   recommendedRooms?: string[];
+  styleTags?: string[];
+  modelType?: FurnitureModelType;
+  modelVariant?: string;
+  product?: FurnitureProductInfo;
+  groupId?: string;
+  groupName?: string;
+  comboDefinitionId?: string;
   color: string;
   accentColor: string;
   shape: FurnitureShape;
@@ -71,6 +116,31 @@ export type FurnitureInstance = FurnitureDefinition & {
   x: number;
   y: number;
   rotation: number;
+};
+
+export type FurnitureComboItem = {
+  furnitureId: string;
+  offsetX: number;
+  offsetY: number;
+  rotation?: number;
+};
+
+export type FurnitureComboDefinition = {
+  id: string;
+  name: string;
+  category: string;
+  styleTags: string[];
+  defaultRoom: string;
+  width: number;
+  depth: number;
+  items: FurnitureComboItem[];
+};
+
+export type MaterialBrushTarget = 'furniture' | 'floor' | 'wall' | 'ceiling';
+
+export type MaterialBrushState = {
+  materialId: string;
+  target: MaterialBrushTarget;
 };
 
 export type RoomLabel = {
@@ -317,6 +387,8 @@ export type DesignDocument = {
   renderSettings?: RenderSettings;
   cloudTasks?: CloudTaskDraft[];
   favoriteFurnitureIds?: string[];
+  favoriteFurnitureComboIds?: string[];
+  materialBrush?: MaterialBrushState;
 };
 
 export type DesignTemplate = {

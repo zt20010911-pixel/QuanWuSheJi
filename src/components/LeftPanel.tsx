@@ -1,5 +1,6 @@
 import {
   Armchair,
+  Brush,
   DoorOpen,
   Hand,
   LayoutTemplate,
@@ -12,8 +13,9 @@ import {
   Upload
 } from 'lucide-react';
 import { FURNITURE_CATEGORIES, FURNITURE_LIBRARY } from '../data/furniture';
+import { FURNITURE_COMBOS, FURNITURE_MATERIAL_LIBRARY, resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { DESIGN_TEMPLATES } from '../data/templates';
-import type { DesignTemplate, FurnitureDefinition, ToolMode, WallDrawMode } from '../types';
+import type { DesignTemplate, FurnitureComboDefinition, FurnitureDefinition, ToolMode, WallDrawMode } from '../types';
 
 type LeftPanelProps = {
   mode: ToolMode;
@@ -23,6 +25,7 @@ type LeftPanelProps = {
   searchText: string;
   usedFurnitureIds: string[];
   favoriteFurnitureIds: string[];
+  favoriteFurnitureComboIds: string[];
   recommendedRoomNames: string[];
   onModeChange: (mode: ToolMode) => void;
   onWallDrawModeChange: (mode: WallDrawMode) => void;
@@ -32,7 +35,9 @@ type LeftPanelProps = {
   onCategoryChange: (category: string) => void;
   onSearchChange: (value: string) => void;
   onFurnitureDragStart: (item: FurnitureDefinition) => void;
+  onFurnitureComboDragStart: (item: FurnitureComboDefinition) => void;
   onToggleFurnitureFavorite: (id: string) => void;
+  onToggleFurnitureComboFavorite: (id: string) => void;
 };
 
 const tools: Array<{ mode: ToolMode; label: string; title: string; icon: typeof MousePointer2 }> = [
@@ -40,6 +45,7 @@ const tools: Array<{ mode: ToolMode; label: string; title: string; icon: typeof 
   { mode: 'wall', label: '墙体', title: '绘制正式墙体', icon: Minus },
   { mode: 'recognition-wall', label: '补墙', title: '补充识别图层墙体', icon: Ruler },
   { mode: 'room-zone', label: '房间', title: '绘制房间区域并统计面积', icon: Square },
+  { mode: 'material-brush', label: '材质', title: '用材质刷快速应用家具或房间材料', icon: Brush },
   { mode: 'door', label: '门', title: '在墙上放置门', icon: DoorOpen },
   { mode: 'window', label: '窗', title: '在墙上放置窗', icon: Square },
   { mode: 'calibrate', label: '标定', title: '用两点标定户型图比例', icon: Ruler },
@@ -78,6 +84,7 @@ export default function LeftPanel({
   searchText,
   usedFurnitureIds,
   favoriteFurnitureIds,
+  favoriteFurnitureComboIds,
   recommendedRoomNames,
   onModeChange,
   onWallDrawModeChange,
@@ -87,26 +94,71 @@ export default function LeftPanel({
   onCategoryChange,
   onSearchChange,
   onFurnitureDragStart,
-  onToggleFurnitureFavorite
+  onFurnitureComboDragStart,
+  onToggleFurnitureFavorite,
+  onToggleFurnitureComboFavorite
 }: LeftPanelProps) {
-  const categoryOptions = ['全部', '已使用', '收藏', '推荐', ...FURNITURE_CATEGORIES.filter((category) => category !== '全部')];
+  const styleOptions = ['现代', '北欧', '轻奢', '收纳', '儿童', '实用'];
+  const materialOptions = FURNITURE_MATERIAL_LIBRARY.map((material) => material.name);
+  const categoryOptions = [
+    '全部',
+    '已使用',
+    '收藏',
+    '推荐',
+    '组合',
+    ...styleOptions,
+    ...materialOptions,
+    ...FURNITURE_CATEGORIES.filter((category) => category !== '全部')
+  ];
   const recommendationRoomKeys = getRecommendationRoomKeys(recommendedRoomNames);
   const filteredFurniture = FURNITURE_LIBRARY.filter((item) => {
     const favorite = favoriteFurnitureIds.includes(item.id);
     const used = usedFurnitureIds.includes(item.id);
+    const material = resolveFurnitureMaterial(item.materialId);
     const recommended = item.recommendedRooms?.some((room) =>
       recommendationRoomKeys.some((name) => name.includes(room) || room.includes(name))
     );
     const matchCategory =
       activeCategory === '全部' ||
       item.category === activeCategory ||
+      item.subcategory === activeCategory ||
+      item.styleTags?.includes(activeCategory) ||
+      material.name === activeCategory ||
       (activeCategory === '已使用' && used) ||
       (activeCategory === '收藏' && favorite) ||
       (activeCategory === '推荐' && Boolean(recommended));
     const keyword = searchText.trim();
-    const matchSearch = !keyword || item.name.includes(keyword) || item.category.includes(keyword);
+    const searchableText = [
+      item.name,
+      item.category,
+      item.subcategory,
+      item.material,
+      material.name,
+      item.product?.brand,
+      item.product?.series,
+      item.product?.sku,
+      ...(item.styleTags ?? [])
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const matchSearch = !keyword || searchableText.includes(keyword);
 
     return matchCategory && matchSearch;
+  });
+  const filteredCombos = FURNITURE_COMBOS.filter((combo) => {
+    const favorite = favoriteFurnitureComboIds.includes(combo.id);
+    const recommended = recommendationRoomKeys.some((name) => name.includes(combo.defaultRoom) || combo.defaultRoom.includes(name));
+    const matchCategory =
+      activeCategory === '全部' ||
+      activeCategory === '组合' ||
+      combo.category === activeCategory ||
+      combo.styleTags.includes(activeCategory) ||
+      (activeCategory === '收藏' && favorite) ||
+      (activeCategory === '推荐' && recommended);
+    const searchableText = [combo.name, combo.category, combo.defaultRoom, ...combo.styleTags].join(' ');
+    const keyword = searchText.trim();
+
+    return matchCategory && (!keyword || searchableText.includes(keyword));
   });
 
   return (
@@ -213,8 +265,49 @@ export default function LeftPanel({
           ))}
         </div>
         <div className="furniture-list">
+          {filteredCombos.map((combo) => {
+            const favorite = favoriteFurnitureComboIds.includes(combo.id);
+
+            return (
+              <div
+                className="furniture-item furniture-combo-item"
+                draggable
+                key={combo.id}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData('text/plain', `combo:${combo.id}`);
+                  onFurnitureComboDragStart(combo);
+                }}
+              >
+                <span className="furniture-swatch combo-swatch">
+                  {combo.items.slice(0, 3).map((item, index) => (
+                    <span key={`${combo.id}-${item.furnitureId}-${index}`} />
+                  ))}
+                </span>
+                <div>
+                  <strong>{combo.name}</strong>
+                  <small>
+                    组合 · {combo.category} · {combo.width}×{combo.depth}cm
+                  </small>
+                  <small>{combo.styleTags.join(' / ')}</small>
+                </div>
+                <button
+                  className={favorite ? 'favorite-button is-active' : 'favorite-button'}
+                  type="button"
+                  title={favorite ? '取消收藏组合' : '收藏组合'}
+                  aria-label={favorite ? '取消收藏组合' : '收藏组合'}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleFurnitureComboFavorite(combo.id);
+                  }}
+                >
+                  <Star size={16} fill={favorite ? 'currentColor' : 'none'} />
+                </button>
+              </div>
+            );
+          })}
           {filteredFurniture.map((item) => {
             const favorite = favoriteFurnitureIds.includes(item.id);
+            const material = resolveFurnitureMaterial(item.materialId);
 
             return (
               <div
@@ -230,8 +323,9 @@ export default function LeftPanel({
                 <div>
                   <strong>{item.name}</strong>
                   <small>
-                    {item.category} · {item.width}×{item.depth}cm · 高{(item.height ?? 0).toFixed(2)}m
+                    {item.category} · {item.subcategory} · {item.width}×{item.depth}cm
                   </small>
+                  <small>{material.name} · {(item.styleTags ?? []).slice(0, 2).join(' / ')}</small>
                 </div>
                 <button
                   className={favorite ? 'favorite-button is-active' : 'favorite-button'}

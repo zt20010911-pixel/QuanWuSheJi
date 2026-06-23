@@ -8,12 +8,15 @@ import SelectedFurnitureToolbar from './components/SelectedFurnitureToolbar';
 import ThreeDViewer, { type ThreeDViewerHandle } from './components/ThreeDViewer';
 import TopBar from './components/TopBar';
 import { DESIGN_TEMPLATES, cloneTemplateDesign, createEmptyDesign } from './data/templates';
+import { DEFAULT_MATERIAL_BRUSH, resolveFurnitureMaterial } from './data/furnitureMaterials';
 import type {
   BackgroundImage,
   DesignDocument,
   DesignTemplate,
+  FurnitureComboDefinition,
   FurnitureDefinition,
   FurnitureInstance,
+  MaterialBrushState,
   Point,
   RecognitionMode,
   RecognitionSession,
@@ -59,6 +62,30 @@ const escapeHtml = (value: string | number | undefined) =>
 const csvCell = (value: string | number | undefined) => {
   const text = String(value ?? '');
   return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+};
+
+const getFurnitureGroupCenter = (items: FurnitureInstance[]): Point => {
+  if (items.length === 0) {
+    return { x: 0, y: 0 };
+  }
+
+  return {
+    x: items.reduce((total, item) => total + item.x, 0) / items.length,
+    y: items.reduce((total, item) => total + item.y, 0) / items.length
+  };
+};
+
+const rotatePointAroundCenter = (point: Point, center: Point, degrees: number): Point => {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+
+  return {
+    x: center.x + dx * cos - dy * sin,
+    y: center.y + dx * sin + dy * cos
+  };
 };
 
 const downloadBlob = (content: BlobPart, type: string, fileName: string) => {
@@ -239,6 +266,7 @@ export default function App() {
   const [leftPanelVisible, setLeftPanelVisible] = useState(true);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [furnitureClipboard, setFurnitureClipboard] = useState<FurnitureInstance | null>(null);
+  const [furnitureGroupClipboard, setFurnitureGroupClipboard] = useState<FurnitureInstance[] | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [recognizingFloorplan, setRecognizingFloorplan] = useState(false);
   const [recognitionMode, setRecognitionMode] = useState<RecognitionMode>('complete');
@@ -255,6 +283,10 @@ export default function App() {
 
   const selectedFurniture =
     selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) ?? null : null;
+  const selectedFurnitureGroup =
+    selection?.type === 'furnitureGroup' ? design.furniture.filter((item) => item.groupId === selection.id) : [];
+  const selectedFurnitureItems = selectedFurniture ? [selectedFurniture] : selectedFurnitureGroup;
+  const selectedFurnitureGroupCenter = getFurnitureGroupCenter(selectedFurnitureGroup);
 
   const selectedFurnitureToolbarStyle = selectedFurniture
     ? {
@@ -263,6 +295,15 @@ export default function App() {
           stagePosition.y +
           (selectedFurniture.y - ((selectedFurniture.depth / 100) * design.canvas.scalePxPerMeter) / 2) * zoom
       }
+    : selectedFurnitureGroup.length
+      ? {
+          left: stagePosition.x + selectedFurnitureGroupCenter.x * zoom,
+          top:
+            stagePosition.y +
+            (Math.min(...selectedFurnitureGroup.map((item) => item.y)) -
+              Math.max(...selectedFurnitureGroup.map((item) => (item.depth / 100) * design.canvas.scalePxPerMeter)) / 2) *
+              zoom
+        }
     : undefined;
 
   const resetWallDraft = useCallback(() => {
@@ -427,6 +468,13 @@ export default function App() {
         };
       }
 
+      if (selection.type === 'furnitureGroup') {
+        return {
+          ...current,
+          furniture: current.furniture.filter((item) => item.groupId !== selection.id)
+        };
+      }
+
       if (selection.type === 'roomZone') {
         return {
           ...current,
@@ -446,15 +494,51 @@ export default function App() {
   }, [commitChange, resetWallDraft, selectedRecognitionIds, selection]);
 
   const copySelectedFurniture = useCallback(() => {
+    if (selectedFurnitureGroup.length > 0) {
+      setFurnitureGroupClipboard(structuredClone(selectedFurnitureGroup));
+      setFurnitureClipboard(null);
+      setStatusText(`已复制组合 ${selectedFurnitureGroup[0].groupName ?? '家具组合'}`);
+      return;
+    }
+
     if (!selectedFurniture) {
       return;
     }
 
     setFurnitureClipboard(structuredClone(selectedFurniture));
+    setFurnitureGroupClipboard(null);
     setStatusText(`已复制 ${selectedFurniture.name}`);
-  }, [selectedFurniture]);
+  }, [selectedFurniture, selectedFurnitureGroup]);
 
   const pasteFurniture = useCallback(() => {
+    if (furnitureGroupClipboard?.length) {
+      const offset = design.canvas.gridSize;
+      const nextGroupId = createId('furniture-group');
+      const groupCenter = getFurnitureGroupCenter(furnitureGroupClipboard);
+      const groupName = furnitureGroupClipboard[0].groupName ?? '家具组合';
+      const nextFurniture = furnitureGroupClipboard.map((item) =>
+        normalizeFurnitureInstance({
+          ...structuredClone(item),
+          instanceId: createId('furniture'),
+          groupId: nextGroupId,
+          groupName,
+          x: item.x - groupCenter.x + groupCenter.x + offset,
+          y: item.y - groupCenter.y + groupCenter.y + offset
+        })
+      );
+
+      commitChange(
+        (current) => ({
+          ...current,
+          furniture: [...current.furniture, ...nextFurniture]
+        }),
+        { type: 'furnitureGroup', id: nextGroupId }
+      );
+      setFurnitureGroupClipboard(nextFurniture);
+      setStatusText(`已粘贴组合 ${groupName}`);
+      return;
+    }
+
     if (!furnitureClipboard) {
       return;
     }
@@ -477,9 +561,32 @@ export default function App() {
     );
     setFurnitureClipboard(nextFurniture);
     setStatusText(`已粘贴 ${nextFurniture.name}`);
-  }, [commitChange, design.canvas.gridSize, furnitureClipboard]);
+  }, [commitChange, design.canvas.gridSize, furnitureClipboard, furnitureGroupClipboard]);
 
   const rotateSelectedFurniture = useCallback(() => {
+    if (selectedFurnitureGroup.length > 0) {
+      const selectedGroupId = selectedFurnitureGroup[0].groupId;
+      const center = getFurnitureGroupCenter(selectedFurnitureGroup);
+
+      commitChange((current) => ({
+        ...current,
+        furniture: current.furniture.map((item) => {
+          if (!selectedGroupId || item.groupId !== selectedGroupId) {
+            return item;
+          }
+
+          const point = rotatePointAroundCenter(item, center, 90);
+          return {
+            ...item,
+            x: point.x,
+            y: point.y,
+            rotation: (item.rotation + 90) % 360
+          };
+        })
+      }));
+      return;
+    }
+
     if (!selectedFurniture) {
       return;
     }
@@ -490,10 +597,28 @@ export default function App() {
         item.instanceId === selectedFurniture.instanceId ? { ...item, rotation: (item.rotation + 90) % 360 } : item
       )
     }));
-  }, [commitChange, selectedFurniture]);
+  }, [commitChange, selectedFurniture, selectedFurnitureGroup]);
 
   const nudgeSelectedFurniture = useCallback(
     (deltaX: number, deltaY: number) => {
+      if (selectedFurnitureGroup.length > 0) {
+        const selectedGroupId = selectedFurnitureGroup[0].groupId;
+
+        commitChange((current) => ({
+          ...current,
+          furniture: current.furniture.map((item) =>
+            selectedGroupId && item.groupId === selectedGroupId
+              ? {
+                  ...item,
+                  x: item.x + deltaX,
+                  y: item.y + deltaY
+                }
+              : item
+          )
+        }));
+        return;
+      }
+
       if (!selectedFurniture) {
         return;
       }
@@ -511,7 +636,7 @@ export default function App() {
         )
       }));
     },
-    [commitChange, selectedFurniture]
+    [commitChange, selectedFurniture, selectedFurnitureGroup]
   );
 
   useEffect(() => {
@@ -540,7 +665,7 @@ export default function App() {
       }
 
       if (event.ctrlKey && event.key.toLowerCase() === 'c') {
-        if (selectedFurniture) {
+        if (selectedFurnitureItems.length > 0) {
           event.preventDefault();
           copySelectedFurniture();
         }
@@ -548,7 +673,7 @@ export default function App() {
       }
 
       if (event.ctrlKey && event.key.toLowerCase() === 'v') {
-        if (furnitureClipboard) {
+        if (furnitureClipboard || furnitureGroupClipboard?.length) {
           event.preventDefault();
           pasteFurniture();
         }
@@ -556,7 +681,7 @@ export default function App() {
       }
 
       if (!event.ctrlKey && event.key.toLowerCase() === 'r') {
-        if (selectedFurniture) {
+        if (selectedFurnitureItems.length > 0) {
           event.preventDefault();
           rotateSelectedFurniture();
         }
@@ -572,7 +697,7 @@ export default function App() {
       };
       const nudge = arrowNudgeMap[event.key];
 
-      if (nudge && selectedFurniture) {
+      if (nudge && selectedFurnitureItems.length > 0) {
         event.preventDefault();
         nudgeSelectedFurniture(nudge.x, nudge.y);
         return;
@@ -600,6 +725,7 @@ export default function App() {
     deleteSelection,
     design.canvas.gridSize,
     furnitureClipboard,
+    furnitureGroupClipboard,
     nudgeSelectedFurniture,
     pasteFurniture,
     mode,
@@ -607,6 +733,7 @@ export default function App() {
     resetWallDraft,
     rotateSelectedFurniture,
     selectedFurniture,
+    selectedFurnitureItems.length,
     undo,
     viewMode,
     wallDrawMode
@@ -828,8 +955,30 @@ export default function App() {
     setStatusText('已更新家具收藏');
   };
 
+  const toggleFurnitureComboFavorite = (id: string) => {
+    commitChange((current) => {
+      const favoriteIds = new Set(current.favoriteFurnitureComboIds ?? []);
+
+      if (favoriteIds.has(id)) {
+        favoriteIds.delete(id);
+      } else {
+        favoriteIds.add(id);
+      }
+
+      return {
+        ...current,
+        favoriteFurnitureComboIds: Array.from(favoriteIds)
+      };
+    });
+    setStatusText('已更新组合收藏');
+  };
+
   const handleFurnitureDragStart = (item: FurnitureDefinition) => {
-    setDraggedFurnitureId(item.id);
+    setDraggedFurnitureId(`furniture:${item.id}`);
+  };
+
+  const handleFurnitureComboDragStart = (item: FurnitureComboDefinition) => {
+    setDraggedFurnitureId(`combo:${item.id}`);
   };
 
   const handleBackgroundUpload = async (file: File) => {
@@ -1077,6 +1226,8 @@ export default function App() {
         ? `识别补墙 · ${wallModeLabel}`
         : mode === 'room-zone'
           ? '房间区域绘制'
+          : mode === 'material-brush'
+            ? `材质刷 · ${resolveFurnitureMaterial(design.materialBrush?.materialId).name}`
           : mode === 'pan'
         ? '画布平移'
         : mode === 'calibrate'
@@ -1142,6 +1293,7 @@ export default function App() {
           searchText={searchText}
           usedFurnitureIds={Array.from(new Set(design.furniture.map((item) => item.id)))}
           favoriteFurnitureIds={design.favoriteFurnitureIds ?? []}
+          favoriteFurnitureComboIds={design.favoriteFurnitureComboIds ?? []}
           recommendedRoomNames={[...design.rooms.map((room) => room.name), ...(design.roomZones ?? []).map((zone) => zone.name)]}
           onModeChange={(nextMode) => {
             setMode(nextMode);
@@ -1154,7 +1306,9 @@ export default function App() {
           onCategoryChange={setActiveCategory}
           onSearchChange={setSearchText}
           onFurnitureDragStart={handleFurnitureDragStart}
+          onFurnitureComboDragStart={handleFurnitureComboDragStart}
           onToggleFurnitureFavorite={toggleFurnitureFavorite}
+          onToggleFurnitureComboFavorite={toggleFurnitureComboFavorite}
         />
         <div className="center-pane">
           <button
@@ -1185,6 +1339,7 @@ export default function App() {
               stagePosition={stagePosition}
               draggedFurnitureId={draggedFurnitureId}
               recognitionLayer={recognitionLayer}
+              materialBrush={(design.materialBrush ?? DEFAULT_MATERIAL_BRUSH) as MaterialBrushState}
               wallDrawMode={wallDrawMode}
               showWallLengths={showWallLengths}
               showGrid={showGrid}
@@ -1202,10 +1357,10 @@ export default function App() {
           ) : (
             <ThreeDViewer ref={threeViewerRef} design={design} />
           )}
-          {viewMode === 'plan' && selectedFurniture && selectedFurnitureToolbarStyle && (
+          {viewMode === 'plan' && selectedFurnitureItems.length > 0 && selectedFurnitureToolbarStyle && (
             <SelectedFurnitureToolbar
               style={selectedFurnitureToolbarStyle}
-              canPaste={Boolean(furnitureClipboard)}
+              canPaste={Boolean(furnitureClipboard || furnitureGroupClipboard?.length)}
               onCopy={copySelectedFurniture}
               onPaste={pasteFurniture}
               onRotate={rotateSelectedFurniture}
