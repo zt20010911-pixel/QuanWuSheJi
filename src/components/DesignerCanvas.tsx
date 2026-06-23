@@ -2,6 +2,7 @@ import type Konva from 'konva';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Arc, Circle, Ellipse, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text } from 'react-konva';
 import { FURNITURE_LIBRARY } from '../data/furniture';
+import { DEFAULT_ROOM_ZONE_MATERIAL_IDS } from '../data/materials';
 import type {
   BackgroundImage as BackgroundImageData,
   DesignDocument,
@@ -11,18 +12,23 @@ import type {
   RecognitionSession,
   RecognitionWall,
   RoomLabel,
+  RoomZone,
   Selection,
   ToolMode,
-  Wall
+  Wall,
+  WallDrawMode
 } from '../types';
 import {
   createId,
   findNearestWall,
   projectPointOnWall,
+  pxToMeters,
   radiansToDegrees,
   snapPoint,
-  wallAngle
+  wallAngle,
+  wallLengthPx
 } from '../utils/geometry';
+import { getRoomZoneAreaSqm, polygonCentroid } from '../utils/roomMetrics';
 
 type DesignerCanvasProps = {
   design: DesignDocument;
@@ -33,7 +39,10 @@ type DesignerCanvasProps = {
   stagePosition: Point;
   draggedFurnitureId: string | null;
   recognitionLayer?: RecognitionSession | null;
+  wallDrawMode: WallDrawMode;
+  showWallLengths: boolean;
   showGrid?: boolean;
+  wallDraftResetSignal?: number;
   fitViewSignal?: number;
   centerViewSignal?: number;
   onSelectionChange: (selection: Selection | null) => void;
@@ -111,6 +120,12 @@ const getDesignBounds = (design: DesignDocument, recognitionLayer?: RecognitionS
     bounds = extendBounds(bounds, item.x + widthPx / 2, item.y + depthPx / 2);
   });
 
+  (design.roomZones ?? []).forEach((zone) => {
+    zone.points.forEach((point) => {
+      bounds = extendBounds(bounds, point.x, point.y);
+    });
+  });
+
   if (design.backgroundImage?.visible) {
     bounds = extendBounds(bounds, design.backgroundImage.x, design.backgroundImage.y);
     bounds = extendBounds(
@@ -141,7 +156,10 @@ export default function DesignerCanvas({
   stagePosition,
   draggedFurnitureId,
   recognitionLayer,
+  wallDrawMode,
+  showWallLengths,
   showGrid = true,
+  wallDraftResetSignal = 0,
   fitViewSignal = 0,
   centerViewSignal = 0,
   onSelectionChange,
@@ -156,8 +174,11 @@ export default function DesignerCanvas({
   const [stageSize, setStageSize] = useState({ width: 900, height: 700 });
   const [wallStart, setWallStart] = useState<Point | null>(null);
   const [wallPreview, setWallPreview] = useState<Point | null>(null);
+  const [roomZoneDraft, setRoomZoneDraft] = useState<Point[]>([]);
+  const [roomZonePreview, setRoomZonePreview] = useState<Point | null>(null);
   const lastFitViewSignalRef = useRef(0);
   const lastCenterViewSignalRef = useRef(0);
+  const lastWallDraftResetSignalRef = useRef(wallDraftResetSignal);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -223,6 +244,30 @@ export default function DesignerCanvas({
     lastCenterViewSignalRef.current = centerViewSignal;
     applyViewportToBounds(false);
   }, [centerViewSignal]);
+
+  useEffect(() => {
+    if (wallDraftResetSignal === lastWallDraftResetSignalRef.current) {
+      return;
+    }
+
+    lastWallDraftResetSignalRef.current = wallDraftResetSignal;
+    setWallStart(null);
+    setWallPreview(null);
+    setRoomZoneDraft([]);
+    setRoomZonePreview(null);
+  }, [wallDraftResetSignal]);
+
+  useEffect(() => {
+    if (mode !== 'wall' && mode !== 'recognition-wall') {
+      setWallStart(null);
+      setWallPreview(null);
+    }
+
+    if (mode !== 'room-zone') {
+      setRoomZoneDraft([]);
+      setRoomZonePreview(null);
+    }
+  }, [mode]);
 
   const getPointerWorldPoint = () => {
     const stage = stageRef.current;
@@ -312,6 +357,48 @@ export default function DesignerCanvas({
       return;
     }
 
+    if (mode === 'room-zone') {
+      const firstPoint = roomZoneDraft[0];
+      const closingDistance = firstPoint ? Math.hypot(point.x - firstPoint.x, point.y - firstPoint.y) : Number.POSITIVE_INFINITY;
+      const shouldClose = roomZoneDraft.length >= 3 && closingDistance <= design.canvas.gridSize;
+
+      if (shouldClose) {
+        const points = roomZoneDraft;
+        const zoneId = createId('room-zone');
+        const label = polygonCentroid(points);
+
+        onCommitChange(
+          (current) => ({
+            ...current,
+            roomZones: [
+              ...(current.roomZones ?? []),
+              {
+                id: zoneId,
+                name: `房间${(current.roomZones ?? []).length + 1}`,
+                points,
+                label,
+                materialIds: { ...DEFAULT_ROOM_ZONE_MATERIAL_IDS },
+                color: ['#7cc8a8', '#8fb7e8', '#e5b56c', '#d98f8f'][(current.roomZones ?? []).length % 4]
+              }
+            ]
+          }),
+          { type: 'roomZone', id: zoneId }
+        );
+        setRoomZoneDraft([]);
+        setRoomZonePreview(null);
+        return;
+      }
+
+      const lastPoint = roomZoneDraft[roomZoneDraft.length - 1];
+      const isDuplicate = lastPoint && Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < design.canvas.gridSize / 2;
+
+      if (!isDuplicate) {
+        setRoomZoneDraft((current) => [...current, point]);
+        setRoomZonePreview(point);
+      }
+      return;
+    }
+
     if (mode === 'wall' || mode === 'recognition-wall') {
       if (!wallStart) {
         setWallStart(point);
@@ -333,6 +420,8 @@ export default function DesignerCanvas({
           start: wallStart,
           end: point,
           thickness: 14,
+          confidence: 1,
+          source: 'inferred',
           status: 'active'
         };
 
@@ -352,8 +441,12 @@ export default function DesignerCanvas({
             verticalCount: 0,
             confidence: '中' as const,
             parameters: {
+              mode: 'complete' as const,
               gridSize: current.canvas.gridSize,
-              minWallLength: current.canvas.gridSize * 3
+              minWallLength: current.canvas.gridSize * 3,
+              rawWallCount: 0,
+              candidateWallCount: 0,
+              inferredWallCount: 1
             }
           };
           const walls = [...recognition.walls, recognitionWall];
@@ -385,8 +478,13 @@ export default function DesignerCanvas({
           { type: 'wall', id: wallId }
         );
       }
-      setWallStart(point);
-      setWallPreview(point);
+      if (wallDrawMode === 'continuous') {
+        setWallStart(point);
+        setWallPreview(point);
+      } else {
+        setWallStart(null);
+        setWallPreview(null);
+      }
       return;
     }
 
@@ -450,6 +548,9 @@ export default function DesignerCanvas({
     );
   };
 
+  const roomZoneDraftPoints = (roomZonePreview && roomZoneDraft.length ? [...roomZoneDraft, roomZonePreview] : roomZoneDraft)
+    .flatMap((point) => [point.x, point.y]);
+
   return (
     <main
       className="canvas-shell"
@@ -504,14 +605,19 @@ export default function DesignerCanvas({
           });
         }}
         onMouseMove={() => {
-          if ((mode !== 'wall' && mode !== 'recognition-wall') || !wallStart) {
+          const point = getPointerWorldPoint();
+
+          if (!point) {
             return;
           }
 
-          const point = getPointerWorldPoint();
-
-          if (point) {
+          if ((mode === 'wall' || mode === 'recognition-wall') && wallStart) {
             setWallPreview(snapPoint(point, design.canvas.gridSize));
+            return;
+          }
+
+          if (mode === 'room-zone' && roomZoneDraft.length) {
+            setRoomZonePreview(snapPoint(point, design.canvas.gridSize));
           }
         }}
         onMouseDown={(event) => {
@@ -565,6 +671,43 @@ export default function DesignerCanvas({
             />
           )}
 
+          {(design.roomZones ?? []).map((zone) => (
+            <RoomZoneShape
+              key={zone.id}
+              design={design}
+              zone={zone}
+              mode={mode}
+              selected={selection?.type === 'roomZone' && selection.id === zone.id}
+              onSelect={() => onSelectionChange({ type: 'roomZone', id: zone.id })}
+              onDraftStart={onDraftStart}
+              onDraftEnd={onDraftEnd}
+              onDraftChange={onDraftChange}
+            />
+          ))}
+
+          {roomZoneDraft.length > 0 && mode === 'room-zone' && (
+            <Group listening={false}>
+              <Line
+                points={roomZoneDraftPoints}
+                stroke="#22a06b"
+                strokeWidth={3}
+                dash={[12, 8]}
+                lineCap="round"
+                lineJoin="round"
+                closed={false}
+              />
+              <Circle x={roomZoneDraft[0].x} y={roomZoneDraft[0].y} radius={7} fill="#ffffff" stroke="#22a06b" strokeWidth={3} />
+              <Text
+                x={roomZoneDraft[0].x + 12}
+                y={roomZoneDraft[0].y - 24}
+                text="点击首点闭合房间"
+                fontSize={12}
+                fill="#14745b"
+                listening={false}
+              />
+            </Group>
+          )}
+
           {design.rooms.map((room) => (
             <RoomLabelShape
               key={room.id}
@@ -585,6 +728,7 @@ export default function DesignerCanvas({
               wall={wall}
               mode={mode}
               selected={selection?.type === 'wall' && selection.id === wall.id}
+              showLengthLabel={showWallLengths || (selection?.type === 'wall' && selection.id === wall.id)}
               onSelect={() => onSelectionChange({ type: 'wall', id: wall.id })}
               onDraftStart={onDraftStart}
               onDraftEnd={onDraftEnd}
@@ -812,11 +956,37 @@ function CalibrationGuide({ backgroundImage }: { backgroundImage: BackgroundImag
   );
 }
 
+function WallLengthLabel({ design, wall, selected }: { design: DesignDocument; wall: Wall; selected: boolean }) {
+  const length = pxToMeters(wallLengthPx(wall), design.canvas.scalePxPerMeter);
+  const label = `${length.toFixed(2)}m`;
+  const x = (wall.start.x + wall.end.x) / 2;
+  const y = (wall.start.y + wall.end.y) / 2;
+  const width = Math.max(56, label.length * 8 + 16);
+
+  return (
+    <Group x={x} y={y} listening={false}>
+      <Rect
+        x={-width / 2}
+        y={-28}
+        width={width}
+        height={20}
+        fill={selected ? '#fff7e5' : '#ffffff'}
+        stroke={selected ? '#f2a23a' : '#d7dfdb'}
+        strokeWidth={1}
+        cornerRadius={5}
+        opacity={0.92}
+      />
+      <Text x={-width / 2} y={-24} width={width} text={label} align="center" fontSize={12} fill="#384353" />
+    </Group>
+  );
+}
+
 function WallShape({
   design,
   wall,
   mode,
   selected,
+  showLengthLabel,
   onSelect,
   onDraftStart,
   onDraftEnd,
@@ -826,6 +996,7 @@ function WallShape({
   wall: Wall;
   mode: ToolMode;
   selected: boolean;
+  showLengthLabel: boolean;
   onSelect: () => void;
   onDraftStart: () => void;
   onDraftEnd: () => void;
@@ -876,6 +1047,7 @@ function WallShape({
           onSelect();
         }}
       />
+      {showLengthLabel && <WallLengthLabel design={design} wall={wall} selected={selected} />}
       {selected && mode === 'select' && (
         <>
           <Circle
@@ -1199,6 +1371,82 @@ function FurnitureSymbol({
   }
 
   return <Rect x={-widthPx / 2} y={-depthPx / 2} width={widthPx} height={depthPx} {...commonProps} />;
+}
+
+function RoomZoneShape({
+  design,
+  zone,
+  mode,
+  selected,
+  onSelect,
+  onDraftStart,
+  onDraftEnd,
+  onDraftChange
+}: {
+  design: DesignDocument;
+  zone: RoomZone;
+  mode: ToolMode;
+  selected: boolean;
+  onSelect: () => void;
+  onDraftStart: () => void;
+  onDraftEnd: () => void;
+  onDraftChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const area = getRoomZoneAreaSqm(zone, design.canvas.scalePxPerMeter);
+  const displayArea = zone.manualAreaSqm ?? area;
+  const points = zone.points.flatMap((point) => [point.x, point.y]);
+  const labelPosition = zone.label ?? polygonCentroid(zone.points);
+
+  return (
+    <Group
+      draggable={mode === 'select'}
+      listening={mode === 'select'}
+      onMouseDown={(event) => {
+        event.cancelBubble = true;
+        onSelect();
+      }}
+      onDragStart={(event) => {
+        event.cancelBubble = true;
+        onDraftStart();
+      }}
+      onDragMove={(event) => {
+        event.cancelBubble = true;
+      }}
+      onDragEnd={(event) => {
+        event.cancelBubble = true;
+        const dx = event.target.x();
+        const dy = event.target.y();
+        event.target.position({ x: 0, y: 0 });
+
+        onDraftChange((current) => ({
+          ...current,
+          roomZones: (current.roomZones ?? []).map((item) =>
+            item.id === zone.id
+              ? {
+                  ...item,
+                  points: item.points.map((point) => ({ x: point.x + dx, y: point.y + dy })),
+                  label: { x: item.label.x + dx, y: item.label.y + dy }
+                }
+              : item
+          )
+        }));
+        onDraftEnd();
+      }}
+    >
+      <Line
+        points={points}
+        closed
+        fill={selected ? 'rgba(34, 160, 107, 0.18)' : 'rgba(34, 160, 107, 0.1)'}
+        stroke={selected ? '#14745b' : '#22a06b'}
+        strokeWidth={selected ? 3 : 2}
+        dash={selected ? [10, 7] : undefined}
+        lineJoin="round"
+      />
+      <Rect x={labelPosition.x - 42} y={labelPosition.y - 18} width={84} height={36} fill="#ffffff" opacity={0.86} cornerRadius={6} />
+      <Text x={labelPosition.x - 42} y={labelPosition.y - 13} width={84} text={zone.name} align="center" fontSize={12} fontStyle="bold" fill="#1f3f35" />
+      <Text x={labelPosition.x - 42} y={labelPosition.y + 4} width={84} text={displayArea.toFixed(1) + '㎡'} align="center" fontSize={11} fill="#4b635a" />
+    </Group>
+  );
 }
 
 function RoomLabelShape({

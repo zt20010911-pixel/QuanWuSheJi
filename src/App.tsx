@@ -15,17 +15,20 @@ import type {
   FurnitureDefinition,
   FurnitureInstance,
   Point,
+  RecognitionMode,
   RecognitionSession,
   RecognitionWall,
   Selection,
   ToolMode,
   ViewMode,
-  Wall
+  Wall,
+  WallDrawMode
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
 import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId } from './utils/geometry';
 import { normalizeDesign, normalizeFurnitureInstance, normalizeRecognitionWall } from './utils/designMigration';
+import { createEstimateItems, formatCurrency, getEstimateTotal, getRoomZoneAreaSqm } from './utils/roomMetrics';
 
 const HISTORY_LIMIT = 80;
 
@@ -44,6 +47,30 @@ const readFileAsDataUrl = (file: File) =>
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+
+const escapeHtml = (value: string | number | undefined) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const csvCell = (value: string | number | undefined) => {
+  const text = String(value ?? '');
+  return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+};
+
+const downloadBlob = (content: BlobPart, type: string, fileName: string) => {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.download = fileName;
+  link.href = url;
+  link.click();
+  URL.revokeObjectURL(url);
+};
 
 const getImageSize = (dataUrl: string) =>
   new Promise<{ width: number; height: number }>((resolve, reject) => {
@@ -97,6 +124,8 @@ const createRecognitionSession = (
 ): RecognitionSession => {
   const walls: RecognitionWall[] = result.walls.map((wall) => ({
     ...wall,
+    confidence: wall.confidence,
+    source: wall.source,
     status: 'active'
   }));
   const wallCount = walls.length;
@@ -117,8 +146,12 @@ const createRecognitionSession = (
     verticalCount: result.verticalCount,
     confidence,
     parameters: {
+      mode: result.mode,
       gridSize,
-      minWallLength: result.minWallLength
+      minWallLength: result.minWallLength,
+      rawWallCount: result.rawWallCount,
+      candidateWallCount: result.candidateWallCount,
+      inferredWallCount: result.inferredWallCount
     }
   };
 };
@@ -180,6 +213,8 @@ const mergeRecognitionWalls = (walls: RecognitionWall[], gridSize: number) => {
     }
 
     target.thickness = nextThickness;
+    target.confidence = Math.max(target.confidence ?? 0.72, wall.confidence ?? 0.72);
+    target.source = 'merged';
   });
 
   return merged;
@@ -206,8 +241,12 @@ export default function App() {
   const [furnitureClipboard, setFurnitureClipboard] = useState<FurnitureInstance | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [recognizingFloorplan, setRecognizingFloorplan] = useState(false);
+  const [recognitionMode, setRecognitionMode] = useState<RecognitionMode>('complete');
   const [importWizardOpen, setImportWizardOpen] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
+  const [wallDrawMode, setWallDrawMode] = useState<WallDrawMode>('single');
+  const [showWallLengths, setShowWallLengths] = useState(true);
+  const [wallDraftResetSignal, setWallDraftResetSignal] = useState(0);
   const [fitViewSignal, setFitViewSignal] = useState(0);
   const [centerViewSignal, setCenterViewSignal] = useState(0);
 
@@ -225,6 +264,27 @@ export default function App() {
           (selectedFurniture.y - ((selectedFurniture.depth / 100) * design.canvas.scalePxPerMeter) / 2) * zoom
       }
     : undefined;
+
+  const resetWallDraft = useCallback(() => {
+    setWallDraftResetSignal((value) => value + 1);
+  }, []);
+
+  const changeWallDrawMode = useCallback(
+    (nextMode: WallDrawMode) => {
+      setWallDrawMode(nextMode);
+      resetWallDraft();
+      setStatusText(nextMode === 'continuous' ? '已开启连续绘制' : '已切回单段绘制');
+    },
+    [resetWallDraft]
+  );
+
+  const toggleWallLengths = useCallback(() => {
+    setShowWallLengths((value) => !value);
+  }, []);
+
+  useEffect(() => {
+    resetWallDraft();
+  }, [mode, resetWallDraft, viewMode]);
 
   const refreshSavedDesigns = useCallback(async () => {
     const designs = await listDesigns();
@@ -313,6 +373,8 @@ export default function App() {
   }, [design]);
 
   const deleteSelection = useCallback(() => {
+    resetWallDraft();
+
     if (selectedRecognitionIds.length > 0) {
       const selectedIds = new Set(selectedRecognitionIds);
 
@@ -365,12 +427,23 @@ export default function App() {
         };
       }
 
-      return {
-        ...current,
-        rooms: current.rooms.filter((room) => room.id !== selection.id)
-      };
+      if (selection.type === 'roomZone') {
+        return {
+          ...current,
+          roomZones: (current.roomZones ?? []).filter((zone) => zone.id !== selection.id)
+        };
+      }
+
+      if (selection.type === 'room') {
+        return {
+          ...current,
+          rooms: current.rooms.filter((room) => room.id !== selection.id)
+        };
+      }
+
+      return current;
     }, null);
-  }, [commitChange, selectedRecognitionIds, selection]);
+  }, [commitChange, resetWallDraft, selectedRecognitionIds, selection]);
 
   const copySelectedFurniture = useCallback(() => {
     if (!selectedFurniture) {
@@ -451,6 +524,21 @@ export default function App() {
         return;
       }
 
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSelection(null);
+        resetWallDraft();
+        setStatusText('已取消当前绘制起点');
+        return;
+      }
+
+      if (event.key === 'Enter' && (mode === 'wall' || mode === 'recognition-wall')) {
+        event.preventDefault();
+        resetWallDraft();
+        setStatusText(wallDrawMode === 'continuous' ? '已结束连续绘制' : '已结束当前墙体绘制');
+        return;
+      }
+
       if (event.ctrlKey && event.key.toLowerCase() === 'c') {
         if (selectedFurniture) {
           event.preventDefault();
@@ -514,14 +602,18 @@ export default function App() {
     furnitureClipboard,
     nudgeSelectedFurniture,
     pasteFurniture,
+    mode,
     redo,
+    resetWallDraft,
     rotateSelectedFurniture,
     selectedFurniture,
     undo,
-    viewMode
+    viewMode,
+    wallDrawMode
   ]);
 
   const applyTemplate = (template: DesignTemplate) => {
+    resetWallDraft();
     commitChange(() => cloneTemplateDesign(template), null);
     setImportWizardOpen(false);
     setZoom(0.82);
@@ -530,6 +622,7 @@ export default function App() {
   };
 
   const handleNew = () => {
+    resetWallDraft();
     commitChange(() => createEmptyDesign(), null);
     setImportWizardOpen(false);
     setMode('wall');
@@ -552,6 +645,7 @@ export default function App() {
       return;
     }
 
+    resetWallDraft();
     setHistory((items) => keepRecentHistory([...items, structuredClone(design)]));
     setFuture([]);
     setDesign(storedDesign);
@@ -560,11 +654,28 @@ export default function App() {
     setStatusText(`已打开${storedDesign.name}`);
   };
 
-  const exportPng = () => {
+  const createExportSnapshot = (
+    kind: NonNullable<DesignDocument['exportHistory']>[number]['kind'],
+    fileName: string
+  ) =>
+    stampDesign({
+      ...design,
+      exportHistory: [
+        ...(design.exportHistory ?? []),
+        {
+          id: createId('export'),
+          kind,
+          fileName,
+          createdAt: new Date().toISOString()
+        }
+      ]
+    });
+
+  const getPlanDataUrl = () => {
     const stage = stageRef.current;
 
     if (!stage) {
-      return;
+      return '';
     }
 
     const recognitionNodes = stage.find('.recognition-layer');
@@ -577,25 +688,119 @@ export default function App() {
 
     recognitionNodes.forEach((node, index) => node.visible(previousVisibility[index]));
     stage.draw();
+    return dataUrl;
+  };
+
+  const exportPng = () => {
+    const dataUrl = getPlanDataUrl();
+
+    if (!dataUrl) {
+      return;
+    }
+
+    const fileName = `${design.name || '全屋设计'}.png`;
     const link = document.createElement('a');
-    link.download = `${design.name || '全屋设计'}.png`;
+
+    link.download = fileName;
     link.href = dataUrl;
     link.click();
     setStatusText('已导出 PNG');
   };
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(stampDesign(design), null, 2)], {
-      type: 'application/json;charset=utf-8'
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
+    const fileName = `${design.name || '全屋设计'}-方案.json`;
+    const snapshot = createExportSnapshot('json', fileName);
 
-    link.download = `${design.name || '全屋设计'}-方案.json`;
-    link.href = url;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(JSON.stringify(snapshot, null, 2), 'application/json;charset=utf-8', fileName);
     setStatusText('已导出方案 JSON');
+  };
+
+  const exportEstimateCsv = () => {
+    const fileName = `${design.name || '全屋设计'}-预算清单.csv`;
+    const snapshot = createExportSnapshot('csv-estimate', fileName);
+    const items = createEstimateItems(snapshot);
+    const rows = [
+      ['类别', '房间', '项目', '数量', '单位', '单价', '损耗率', '小计'],
+      ...items.map((item) => [
+        item.category,
+        item.roomName,
+        item.name,
+        item.quantity.toFixed(2),
+        item.unit,
+        item.unitPrice.toFixed(2),
+        `${Math.round(item.wasteRate * 100)}%`,
+        item.total.toFixed(2)
+      ])
+    ];
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\n');
+
+    downloadBlob('\uFEFF' + csv, 'text/csv;charset=utf-8', fileName);
+    setStatusText('已导出预算 CSV');
+  };
+
+  const exportHtmlReport = () => {
+    const fileName = `${design.name || '全屋设计'}-交付报告.html`;
+    const snapshot = createExportSnapshot('html-report', fileName);
+    const items = createEstimateItems(snapshot);
+    const total = getEstimateTotal(items);
+    const planImage = getPlanDataUrl();
+    const roomZoneRows = (snapshot.roomZones ?? [])
+      .map((zone) => {
+        const autoArea = getRoomZoneAreaSqm(zone, snapshot.canvas.scalePxPerMeter);
+        const displayArea = zone.manualAreaSqm ?? autoArea;
+        return `<tr><td>${escapeHtml(zone.name)}</td><td>${displayArea.toFixed(2)}㎡</td><td>${zone.manualAreaSqm ? '手动面积' : '自动面积'}</td></tr>`;
+      })
+      .join('');
+    const estimateRows = items
+      .map(
+        (item) =>
+          `<tr><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.roomName)}</td><td>${escapeHtml(item.name)}</td><td>${item.quantity.toFixed(2)}${escapeHtml(item.unit)}</td><td>${formatCurrency(item.total)}</td></tr>`
+      )
+      .join('');
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(snapshot.name)} 交付报告</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f5f7f4; }
+    main { max-width: 1040px; margin: 0 auto; padding: 32px; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin: 28px 0 12px; font-size: 18px; }
+    .meta { color: #5d6874; margin-bottom: 24px; }
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .card { background: #fff; border: 1px solid #dfe6e1; border-radius: 8px; padding: 14px; }
+    .card strong { display: block; font-size: 22px; margin-top: 6px; }
+    img { max-width: 100%; border: 1px solid #dfe6e1; border-radius: 8px; background: #fff; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dfe6e1; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid #edf1ee; text-align: left; font-size: 14px; }
+    th { background: #eef4f0; }
+    .total { text-align: right; font-size: 20px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(snapshot.name)}</h1>
+    <div class="meta">生成时间：${escapeHtml(new Date(snapshot.updatedAt).toLocaleString('zh-CN'))}</div>
+    <section class="summary">
+      <div class="card">墙体<strong>${snapshot.walls.length}</strong></div>
+      <div class="card">门窗<strong>${snapshot.openings.length}</strong></div>
+      <div class="card">家具<strong>${snapshot.furniture.length}</strong></div>
+      <div class="card">总面积<strong>${snapshot.homeAreaSqm ? snapshot.homeAreaSqm.toFixed(1) + '㎡' : '未填写'}</strong></div>
+    </section>
+    <h2>平面图</h2>
+    ${planImage ? `<img src="${planImage}" alt="平面图" />` : '<p>当前不在平面编辑视图，未生成平面图预览。</p>'}
+    <h2>房间区域</h2>
+    <table><thead><tr><th>房间</th><th>面积</th><th>来源</th></tr></thead><tbody>${roomZoneRows || '<tr><td colspan="3">尚未绘制房间区域</td></tr>'}</tbody></table>
+    <h2>预算清单</h2>
+    <table><thead><tr><th>类别</th><th>房间</th><th>项目</th><th>数量</th><th>小计</th></tr></thead><tbody>${estimateRows || '<tr><td colspan="5">暂无预算项目</td></tr>'}</tbody></table>
+    <p class="total">预算合计：${formatCurrency(total)}</p>
+  </main>
+</body>
+</html>`;
+
+    downloadBlob(html, 'text/html;charset=utf-8', fileName);
+    setStatusText('已导出 HTML 交付报告');
   };
 
   const exportThreeDPng = () => {
@@ -628,6 +833,7 @@ export default function App() {
   };
 
   const handleBackgroundUpload = async (file: File) => {
+    resetWallDraft();
     const backgroundImage = await createBackgroundImage(file, design.canvas.width, design.canvas.height);
     commitChange((current) => ({ ...current, backgroundImage, recognition: undefined }), null);
     setImportWizardOpen(true);
@@ -663,7 +869,10 @@ export default function App() {
     setStatusText('正在识别到独立图层');
 
     try {
-      const result = await recognizeFloorplanWalls(design.backgroundImage, { gridSize: design.canvas.gridSize });
+      const result = await recognizeFloorplanWalls(design.backgroundImage, {
+        gridSize: design.canvas.gridSize,
+        mode: recognitionMode
+      });
 
       if (result.walls.length === 0) {
         setStatusText('未识别到足够清晰的墙体，请调高底图清晰度后重试');
@@ -858,14 +1067,17 @@ export default function App() {
     setStatusText('已放弃识别图层，正式方案未受影响');
   };
 
+  const wallModeLabel = wallDrawMode === 'continuous' ? '连续' : '单段';
   const modeText =
     viewMode === 'threeD'
       ? '3D预览'
       : mode === 'wall'
-      ? '墙体绘制'
+      ? `墙体绘制 · ${wallModeLabel}`
       : mode === 'recognition-wall'
-        ? '识别补墙'
-        : mode === 'pan'
+        ? `识别补墙 · ${wallModeLabel}`
+        : mode === 'room-zone'
+          ? '房间区域绘制'
+          : mode === 'pan'
         ? '画布平移'
         : mode === 'calibrate'
           ? '比例标定'
@@ -889,8 +1101,13 @@ export default function App() {
         onOpen={handleOpen}
         onExportPng={exportPng}
         onExportJson={exportJson}
+        onExportEstimateCsv={exportEstimateCsv}
+        onExportHtmlReport={exportHtmlReport}
         onExport3DPng={exportThreeDPng}
-        onViewModeChange={setViewMode}
+        onViewModeChange={(nextMode) => {
+          setViewMode(nextMode);
+          resetWallDraft();
+        }}
         onFitView={() => setFitViewSignal((value) => value + 1)}
         onCenterView={() => setCenterViewSignal((value) => value + 1)}
         onToggleGrid={() => setShowGrid((value) => !value)}
@@ -919,12 +1136,19 @@ export default function App() {
       >
         <LeftPanel
           mode={mode}
+          wallDrawMode={wallDrawMode}
+          showWallLengths={showWallLengths}
           activeCategory={activeCategory}
           searchText={searchText}
           usedFurnitureIds={Array.from(new Set(design.furniture.map((item) => item.id)))}
           favoriteFurnitureIds={design.favoriteFurnitureIds ?? []}
-          recommendedRoomNames={design.rooms.map((room) => room.name)}
-          onModeChange={setMode}
+          recommendedRoomNames={[...design.rooms.map((room) => room.name), ...(design.roomZones ?? []).map((zone) => zone.name)]}
+          onModeChange={(nextMode) => {
+            setMode(nextMode);
+            resetWallDraft();
+          }}
+          onWallDrawModeChange={changeWallDrawMode}
+          onToggleWallLengths={toggleWallLengths}
           onApplyTemplate={applyTemplate}
           onBackgroundUpload={handleBackgroundUpload}
           onCategoryChange={setActiveCategory}
@@ -961,7 +1185,10 @@ export default function App() {
               stagePosition={stagePosition}
               draggedFurnitureId={draggedFurnitureId}
               recognitionLayer={recognitionLayer}
+              wallDrawMode={wallDrawMode}
+              showWallLengths={showWallLengths}
               showGrid={showGrid}
+              wallDraftResetSignal={wallDraftResetSignal}
               fitViewSignal={fitViewSignal}
               centerViewSignal={centerViewSignal}
               onSelectionChange={setSelection}
@@ -993,10 +1220,19 @@ export default function App() {
         <PropertiesPanel
           design={design}
           selection={selection}
+          wallDrawMode={wallDrawMode}
+          showWallLengths={showWallLengths}
           onChange={commitChange}
           onDelete={deleteSelection}
+          onWallDrawModeChange={changeWallDrawMode}
+          onToggleWallLengths={toggleWallLengths}
+          onExportJson={exportJson}
+          onExportEstimateCsv={exportEstimateCsv}
+          onExportHtmlReport={exportHtmlReport}
           onStartCalibration={startCalibration}
           onRecognizeFloorplan={recognizeFloorplan}
+          recognitionMode={recognitionMode}
+          onRecognitionModeChange={setRecognitionMode}
           onKeepBackgroundReference={keepBackgroundAsReference}
           onSelectAllRecognitionWalls={selectAllRecognitionWalls}
           onClearRecognitionSelection={clearRecognitionSelection}

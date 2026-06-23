@@ -3,6 +3,8 @@ import {
   Download,
   FilePlus2,
   FileJson,
+  FileSpreadsheet,
+  FileText,
   FolderOpen,
   Grid2X2,
   Image,
@@ -34,6 +36,8 @@ type TopBarProps = {
   onOpen: (id: string) => void;
   onExportPng: () => void;
   onExportJson: () => void;
+  onExportEstimateCsv: () => void;
+  onExportHtmlReport: () => void;
   onExport3DPng: () => void;
   onViewModeChange: (mode: ViewMode) => void;
   onFitView: () => void;
@@ -70,6 +74,8 @@ export default function TopBar({
   onOpen,
   onExportPng,
   onExportJson,
+  onExportEstimateCsv,
+  onExportHtmlReport,
   onExport3DPng,
   onViewModeChange,
   onFitView,
@@ -120,6 +126,14 @@ export default function TopBar({
         <button className="icon-button command-button" onClick={onExportJson} title="导出方案 JSON" type="button">
           <FileJson size={17} />
           <span>JSON</span>
+        </button>
+        <button className="icon-button command-button" onClick={onExportEstimateCsv} title="导出预算 CSV" type="button">
+          <FileSpreadsheet size={17} />
+          <span>预算</span>
+        </button>
+        <button className="icon-button command-button" onClick={onExportHtmlReport} title="导出 HTML 交付报告" type="button">
+          <FileText size={17} />
+          <span>报告</span>
         </button>
         {viewMode === 'threeD' && (
           <button className="icon-button command-button" onClick={onExport3DPng} title="导出 3D 效果图" type="button">

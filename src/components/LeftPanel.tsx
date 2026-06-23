@@ -13,16 +13,20 @@ import {
 } from 'lucide-react';
 import { FURNITURE_CATEGORIES, FURNITURE_LIBRARY } from '../data/furniture';
 import { DESIGN_TEMPLATES } from '../data/templates';
-import type { DesignTemplate, FurnitureDefinition, ToolMode } from '../types';
+import type { DesignTemplate, FurnitureDefinition, ToolMode, WallDrawMode } from '../types';
 
 type LeftPanelProps = {
   mode: ToolMode;
+  wallDrawMode: WallDrawMode;
+  showWallLengths: boolean;
   activeCategory: string;
   searchText: string;
   usedFurnitureIds: string[];
   favoriteFurnitureIds: string[];
   recommendedRoomNames: string[];
   onModeChange: (mode: ToolMode) => void;
+  onWallDrawModeChange: (mode: WallDrawMode) => void;
+  onToggleWallLengths: () => void;
   onApplyTemplate: (template: DesignTemplate) => void;
   onBackgroundUpload: (file: File) => void;
   onCategoryChange: (category: string) => void;
@@ -35,6 +39,7 @@ const tools: Array<{ mode: ToolMode; label: string; title: string; icon: typeof 
   { mode: 'select', label: '选择', title: '选择和移动对象', icon: MousePointer2 },
   { mode: 'wall', label: '墙体', title: '绘制正式墙体', icon: Minus },
   { mode: 'recognition-wall', label: '补墙', title: '补充识别图层墙体', icon: Ruler },
+  { mode: 'room-zone', label: '房间', title: '绘制房间区域并统计面积', icon: Square },
   { mode: 'door', label: '门', title: '在墙上放置门', icon: DoorOpen },
   { mode: 'window', label: '窗', title: '在墙上放置窗', icon: Square },
   { mode: 'calibrate', label: '标定', title: '用两点标定户型图比例', icon: Ruler },
@@ -67,12 +72,16 @@ const getRecommendationRoomKeys = (roomNames: string[]) => {
 
 export default function LeftPanel({
   mode,
+  wallDrawMode,
+  showWallLengths,
   activeCategory,
   searchText,
   usedFurnitureIds,
   favoriteFurnitureIds,
   recommendedRoomNames,
   onModeChange,
+  onWallDrawModeChange,
+  onToggleWallLengths,
   onApplyTemplate,
   onBackgroundUpload,
   onCategoryChange,
@@ -138,6 +147,30 @@ export default function LeftPanel({
             }}
           />
         </label>
+        <div className="draw-options">
+          <div className="draw-mode-toggle" aria-label="墙体绘制模式">
+            <button
+              className={wallDrawMode === 'single' ? 'is-active' : ''}
+              type="button"
+              title="默认一段一段画墙，画完后自动结束起点"
+              onClick={() => onWallDrawModeChange('single')}
+            >
+              单段
+            </button>
+            <button
+              className={wallDrawMode === 'continuous' ? 'is-active' : ''}
+              type="button"
+              title="连续绘制会把上一段终点作为下一段起点"
+              onClick={() => onWallDrawModeChange('continuous')}
+            >
+              连续
+            </button>
+          </div>
+          <label className="draw-checkbox">
+            <input type="checkbox" checked={showWallLengths} onChange={onToggleWallLengths} />
+            <span>显示墙长</span>
+          </label>
+        </div>
         <div className="tool-grid">
           {tools.map((tool) => {
             const Icon = tool.icon;

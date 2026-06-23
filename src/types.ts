@@ -3,18 +3,21 @@ export type Point = {
   y: number;
 };
 
-export type ToolMode = 'select' | 'wall' | 'door' | 'window' | 'pan' | 'calibrate' | 'recognition-wall';
+export type ToolMode = 'select' | 'wall' | 'door' | 'window' | 'pan' | 'calibrate' | 'recognition-wall' | 'room-zone';
 
 export type ViewMode = 'plan' | 'threeD';
 
-export const DESIGN_DOCUMENT_VERSION = 3;
+export type WallDrawMode = 'single' | 'continuous';
+
+export const DESIGN_DOCUMENT_VERSION = 5;
 
 export type Selection =
   | { type: 'wall'; id: string }
   | { type: 'recognitionWall'; id: string }
   | { type: 'opening'; id: string }
   | { type: 'furniture'; id: string }
-  | { type: 'room'; id: string };
+  | { type: 'room'; id: string }
+  | { type: 'roomZone'; id: string };
 
 export type Wall = {
   id: string;
@@ -78,6 +81,79 @@ export type RoomLabel = {
   area: string;
 };
 
+export type FeatureModuleStatus = 'available' | 'beta' | 'planned' | 'external-required';
+
+export type FeatureModuleKey =
+  | 'floorplan-recognition'
+  | 'two-d-editing'
+  | 'three-d-rendering'
+  | 'furniture-materials'
+  | 'estimate-report'
+  | 'mobile-capture'
+  | 'cloud-collaboration'
+  | 'ai-design'
+  | 'format-io';
+
+export type RoadmapModule = {
+  key: FeatureModuleKey;
+  title: string;
+  description: string;
+  status: FeatureModuleStatus;
+  benchmark: string;
+  version: string;
+};
+
+export type MaterialCategory = 'floor' | 'wall' | 'ceiling' | 'construction' | 'opening';
+
+export type MaterialDefinition = {
+  id: string;
+  category: MaterialCategory;
+  name: string;
+  unit: '㎡' | 'm' | '项' | '个';
+  unitPrice: number;
+  wasteRate: number;
+  color: string;
+};
+
+export type RoomZoneMaterialIds = {
+  floor: string;
+  wall: string;
+  ceiling: string;
+};
+
+export type RoomZone = {
+  id: string;
+  name: string;
+  points: Point[];
+  label: Point;
+  manualAreaSqm?: number;
+  materialIds: RoomZoneMaterialIds;
+  color: string;
+};
+
+export type EstimateSettings = {
+  currency: 'CNY';
+  wallHeightMeters: number;
+  includeWaste: boolean;
+  priceTemplateVersion: string;
+  wasteRate: number;
+  materialOverrides: Record<string, number>;
+};
+
+export type EstimateItem = {
+  id: string;
+  category: MaterialCategory | 'furniture' | 'custom';
+  name: string;
+  roomZoneId?: string;
+  roomName?: string;
+  unit: MaterialDefinition['unit'];
+  quantity: number;
+  unitPrice: number;
+  wasteRate: number;
+  total: number;
+  source: 'auto' | 'custom';
+};
+
 export type BackgroundImageCalibration = {
   start?: Point;
   end?: Point;
@@ -101,10 +177,16 @@ export type BackgroundImage = {
 
 export type RecognitionStatus = 'draft' | 'confirmed';
 
+export type RecognitionMode = 'complete' | 'precise';
+
+export type RecognitionWallSource = 'scan' | 'merged' | 'inferred';
+
 export type RecognitionWallStatus = 'active' | 'deleted' | 'promoted';
 
 export type RecognitionWall = Wall & {
   status: RecognitionWallStatus;
+  confidence?: number;
+  source?: RecognitionWallSource;
   promotedWallId?: string;
   updatedAt?: string;
 };
@@ -124,24 +206,34 @@ export type RecognitionSession = {
   verticalCount: number;
   confidence: '低' | '中' | '高';
   parameters: {
+    mode: RecognitionMode;
     gridSize: number;
     minWallLength: number;
+    rawWallCount: number;
+    candidateWallCount: number;
+    inferredWallCount: number;
   };
 };
 
 export type RenderLightMode = 'daylight' | 'warm' | 'studio';
 
-export type RenderCameraPreset = 'overview' | 'corner' | 'front';
+export type RenderCameraPreset = 'overview' | 'corner' | 'front' | 'top' | 'walkthrough';
 
 export type RenderMaterialMode = 'clean' | 'warm' | 'contrast';
+
+export type RenderEnvironmentMode = 'studio' | 'daylight' | 'evening';
 
 export type RenderSettings = {
   cameraPreset: RenderCameraPreset;
   lightMode: RenderLightMode;
   materialMode: RenderMaterialMode;
+  environmentMode: RenderEnvironmentMode;
+  exportPixelRatio: 1 | 2 | 3;
   wallMaterial: string;
   floorMaterial: string;
   showBackgroundIn3D: boolean;
+  showRoomMaterialsIn3D: boolean;
+  showCeilingHint: boolean;
 };
 
 export type CloudTaskDraft = {
@@ -153,6 +245,45 @@ export type CloudTaskDraft = {
   inputSnapshot?: DesignDocument;
   resultUrl?: string;
   note?: string;
+};
+
+export type ProjectMeta = {
+  clientName?: string;
+  address?: string;
+  designerName?: string;
+  notes?: string;
+};
+
+export type ExportHistoryEntry = {
+  id: string;
+  kind: 'png' | 'json' | 'html-report' | 'csv-estimate' | '3d-png';
+  fileName: string;
+  createdAt: string;
+};
+
+export type MobileCaptureDraft = {
+  enabled: boolean;
+  source: 'lidar' | 'ar' | 'photo' | 'manual';
+  note: string;
+};
+
+export type CollaborationDraft = {
+  enabled: boolean;
+  shareId?: string;
+  role: 'owner' | 'viewer' | 'editor';
+  note: string;
+};
+
+export type AiDesignDraft = {
+  enabled: boolean;
+  prompt: string;
+  status: 'draft' | 'planned';
+};
+
+export type ModelExportDraft = {
+  formats: Array<'GLB' | 'OBJ' | 'DXF' | 'PDF'>;
+  status: 'planned';
+  note: string;
 };
 
 export type DesignDocument = {
@@ -171,6 +302,16 @@ export type DesignDocument = {
   openings: Opening[];
   furniture: FurnitureInstance[];
   rooms: RoomLabel[];
+  roomZones?: RoomZone[];
+  estimateSettings?: EstimateSettings;
+  customEstimateItems?: EstimateItem[];
+  features?: Record<FeatureModuleKey, FeatureModuleStatus>;
+  projectMeta?: ProjectMeta;
+  exportHistory?: ExportHistoryEntry[];
+  collaborationDraft?: CollaborationDraft;
+  mobileCaptureDraft?: MobileCaptureDraft;
+  aiDesignDraft?: AiDesignDraft;
+  modelExportDraft?: ModelExportDraft;
   backgroundImage?: BackgroundImage;
   recognition?: RecognitionSession;
   renderSettings?: RenderSettings;

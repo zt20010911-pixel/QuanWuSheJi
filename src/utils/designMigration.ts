@@ -2,18 +2,49 @@ import {
   DESIGN_DOCUMENT_VERSION,
   type DesignDocument,
   type FurnitureInstance,
+  type ModelExportDraft,
   type RecognitionWall,
   type RenderSettings,
   type Wall
 } from '../types';
+import { DEFAULT_ESTIMATE_SETTINGS, DEFAULT_ROOM_ZONE_MATERIAL_IDS } from '../data/materials';
+import { createDefaultFeatureStates } from '../data/roadmap';
 
 export const DEFAULT_RENDER_SETTINGS: RenderSettings = {
   cameraPreset: 'overview',
   lightMode: 'daylight',
   materialMode: 'clean',
+  environmentMode: 'daylight',
+  exportPixelRatio: 2,
   wallMaterial: '#f2efe8',
   floorMaterial: '#d8c7aa',
-  showBackgroundIn3D: false
+  showBackgroundIn3D: false,
+  showRoomMaterialsIn3D: true,
+  showCeilingHint: false
+};
+
+const DEFAULT_COLLABORATION_DRAFT = {
+  enabled: false,
+  role: 'owner' as const,
+  note: '本地优先版本，云端协作将在后续接入。'
+};
+
+const DEFAULT_MOBILE_CAPTURE_DRAFT = {
+  enabled: false,
+  source: 'manual' as const,
+  note: '预留手机 LiDAR、AR、照片采集数据导入。'
+};
+
+const DEFAULT_AI_DESIGN_DRAFT = {
+  enabled: false,
+  prompt: '',
+  status: 'planned' as const
+};
+
+const DEFAULT_MODEL_EXPORT_DRAFT: ModelExportDraft = {
+  formats: ['GLB', 'OBJ', 'DXF', 'PDF'],
+  status: 'planned' as const,
+  note: '当前仅预留格式出口，真实模型导出将在后续版本实现。'
 };
 
 const getDefaultFurnitureHeight = (furniture: Pick<FurnitureInstance, 'shape' | 'category'>) => {
@@ -47,10 +78,24 @@ export const normalizeRecognitionWall = (wall: Wall | RecognitionWall): Recognit
   return {
     ...wall,
     status: recognitionWall.status ?? 'active',
+    confidence: recognitionWall.confidence ?? 0.72,
+    source: recognitionWall.source ?? 'scan',
     promotedWallId: recognitionWall.promotedWallId,
     updatedAt: recognitionWall.updatedAt
   };
 };
+
+const normalizeRoomZone = (zone: NonNullable<DesignDocument['roomZones']>[number], index: number) => ({
+  ...zone,
+  name: zone.name || `房间区域${index + 1}`,
+  points: zone.points ?? [],
+  label: zone.label ?? zone.points?.[0] ?? { x: 0, y: 0 },
+  materialIds: {
+    ...DEFAULT_ROOM_ZONE_MATERIAL_IDS,
+    ...zone.materialIds
+  },
+  color: zone.color || ['#7cc8a8', '#8fb7e8', '#e5b56c', '#d98f8f'][index % 4]
+});
 
 export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
   ...design,
@@ -60,6 +105,7 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
     scalePxPerMeter: design.canvas.scalePxPerMeter || 80
   },
   furniture: design.furniture.map(normalizeFurnitureInstance),
+  roomZones: (design.roomZones ?? []).map(normalizeRoomZone),
   recognition: design.recognition
     ? {
         ...design.recognition,
@@ -71,8 +117,14 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
         wallCount: design.recognition.walls.map(normalizeRecognitionWall).filter((wall) => wall.status !== 'deleted').length,
         confidence: design.recognition.confidence ?? '中',
         parameters: {
+          mode: design.recognition.parameters?.mode ?? 'complete',
           gridSize: design.recognition.parameters?.gridSize ?? design.canvas.gridSize,
-          minWallLength: design.recognition.parameters?.minWallLength ?? design.canvas.gridSize * 3
+          minWallLength: design.recognition.parameters?.minWallLength ?? design.canvas.gridSize * 3,
+          rawWallCount: design.recognition.parameters?.rawWallCount ?? design.recognition.walls.length,
+          candidateWallCount: design.recognition.parameters?.candidateWallCount ?? design.recognition.walls.length,
+          inferredWallCount:
+            design.recognition.parameters?.inferredWallCount ??
+            design.recognition.walls.filter((wall) => wall.source === 'inferred').length
         }
       }
     : undefined,
@@ -81,5 +133,24 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
     ...design.renderSettings
   },
   cloudTasks: design.cloudTasks ?? [],
-  favoriteFurnitureIds: design.favoriteFurnitureIds ?? []
+  favoriteFurnitureIds: design.favoriteFurnitureIds ?? [],
+  estimateSettings: {
+    ...DEFAULT_ESTIMATE_SETTINGS,
+    ...design.estimateSettings,
+    materialOverrides: {
+      ...DEFAULT_ESTIMATE_SETTINGS.materialOverrides,
+      ...(design.estimateSettings?.materialOverrides ?? {})
+    }
+  },
+  customEstimateItems: design.customEstimateItems ?? [],
+  features: {
+    ...createDefaultFeatureStates(),
+    ...(design.features ?? {})
+  },
+  projectMeta: design.projectMeta ?? {},
+  exportHistory: design.exportHistory ?? [],
+  collaborationDraft: design.collaborationDraft ?? DEFAULT_COLLABORATION_DRAFT,
+  mobileCaptureDraft: design.mobileCaptureDraft ?? DEFAULT_MOBILE_CAPTURE_DRAFT,
+  aiDesignDraft: design.aiDesignDraft ?? DEFAULT_AI_DESIGN_DRAFT,
+  modelExportDraft: design.modelExportDraft ?? DEFAULT_MODEL_EXPORT_DRAFT
 });

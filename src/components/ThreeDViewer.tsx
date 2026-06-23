@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { DesignDocument, RenderSettings } from '../types';
 import { DEFAULT_RENDER_SETTINGS } from '../utils/designMigration';
-import { buildThreeDesignScene, disposeThreeObject } from '../utils/threeScene';
+import { buildThreeDesignScene, disposeThreeObject, RENDER_ENVIRONMENT_PRESETS } from '../utils/threeScene';
 
 export type ThreeDViewerHandle = {
   exportPng: () => void;
@@ -25,37 +25,38 @@ const resolveRenderSettings = (design: DesignDocument): RenderSettings => ({
   ...design.renderSettings
 });
 
-const applyLighting = (
+const applyEnvironment = (
+  scene: THREE.Scene,
   ambientLight: THREE.HemisphereLight,
   sunLight: THREE.DirectionalLight,
-  lightMode: RenderSettings['lightMode']
+  settings: RenderSettings
 ) => {
-  if (lightMode === 'warm') {
+  const preset = RENDER_ENVIRONMENT_PRESETS[settings.environmentMode];
+
+  scene.background = new THREE.Color(preset.background);
+  scene.fog = new THREE.Fog(preset.fog, 18, 60);
+  ambientLight.color.set(preset.ambientSky);
+  ambientLight.groundColor.set(preset.ambientGround);
+  ambientLight.intensity = preset.ambientIntensity;
+  sunLight.color.set(preset.sunColor);
+  sunLight.intensity = preset.sunIntensity;
+  sunLight.position.set(...preset.sunPosition);
+
+  if (settings.lightMode === 'warm') {
     ambientLight.color.set('#fff3df');
     ambientLight.groundColor.set('#dbc7ae');
-    ambientLight.intensity = 1.45;
-    sunLight.color.set('#ffd7a0');
-    sunLight.intensity = 2.0;
-    sunLight.position.set(-4, 5.8, 5);
-    return;
+    ambientLight.intensity += 0.18;
+    sunLight.color.set('#ffd39a');
+    sunLight.intensity += 0.18;
   }
 
-  if (lightMode === 'studio') {
+  if (settings.lightMode === 'studio') {
     ambientLight.color.set('#ffffff');
     ambientLight.groundColor.set('#d9dfdd');
-    ambientLight.intensity = 2.1;
+    ambientLight.intensity += 0.32;
     sunLight.color.set('#ffffff');
-    sunLight.intensity = 1.55;
-    sunLight.position.set(3, 7, 4);
-    return;
+    sunLight.intensity = Math.max(1.45, sunLight.intensity - 0.25);
   }
-
-  ambientLight.color.set('#ffffff');
-  ambientLight.groundColor.set('#cad4cf');
-  ambientLight.intensity = 1.8;
-  sunLight.color.set('#ffffff');
-  sunLight.intensity = 2.2;
-  sunLight.position.set(5, 8, 6);
 };
 
 const applyCameraPreset = (
@@ -65,18 +66,41 @@ const applyCameraPreset = (
   cameraPreset: RenderSettings['cameraPreset']
 ) => {
   if (cameraPreset === 'front') {
-    camera.position.set(0, span * 0.58, span * 1.35);
+    camera.position.set(0, span * 0.5, span * 1.36);
+    controls.target.set(0, 0.95, 0);
   } else if (cameraPreset === 'corner') {
     camera.position.set(span * 0.95, span * 0.62, span * 0.95);
+    controls.target.set(0, 0.95, 0);
+  } else if (cameraPreset === 'top') {
+    camera.position.set(0, span * 1.42, 0.001);
+    controls.target.set(0, 0, 0);
+  } else if (cameraPreset === 'walkthrough') {
+    camera.position.set(span * 0.12, 1.65, span * 0.42);
+    controls.target.set(0, 1.25, 0);
   } else {
     camera.position.set(span * 0.7, span * 0.68, span * 1.05);
+    controls.target.set(0, 0.9, 0);
   }
 
   camera.near = 0.05;
-  camera.far = Math.max(span * 8, 60);
+  camera.far = Math.max(span * 8, 80);
   camera.updateProjectionMatrix();
-  controls.target.set(0, 0.9, 0);
+  controls.maxDistance = Math.max(span * 2.6, 10);
+  controls.minDistance = 1.2;
   controls.update();
+};
+
+const applyShadowCamera = (sunLight: THREE.DirectionalLight, span: number) => {
+  const shadowCamera = sunLight.shadow.camera as THREE.OrthographicCamera;
+  const half = Math.max(span * 0.95, 6);
+
+  shadowCamera.left = -half;
+  shadowCamera.right = half;
+  shadowCamera.top = half;
+  shadowCamera.bottom = -half;
+  shadowCamera.near = 0.5;
+  shadowCamera.far = Math.max(span * 3.5, 36);
+  shadowCamera.updateProjectionMatrix();
 };
 
 export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeDViewer({ design }, ref) {
@@ -89,20 +113,33 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
   const ambientLightRef = useRef<THREE.HemisphereLight | null>(null);
   const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
 
-  useImperativeHandle(ref, () => ({
-    exportPng: () => {
-      const renderer = rendererRef.current;
-      const scene = sceneRef.current;
-      const camera = cameraRef.current;
+  useImperativeHandle(
+    ref,
+    () => ({
+      exportPng: () => {
+        const renderer = rendererRef.current;
+        const scene = sceneRef.current;
+        const camera = cameraRef.current;
 
-      if (!renderer || !scene || !camera) {
-        return;
+        if (!renderer || !scene || !camera) {
+          return;
+        }
+
+        const settings = resolveRenderSettings(design);
+        const size = new THREE.Vector2();
+        const originalPixelRatio = renderer.getPixelRatio();
+        renderer.getSize(size);
+        renderer.setPixelRatio(settings.exportPixelRatio);
+        renderer.setSize(size.x, size.y, false);
+        renderer.render(scene, camera);
+        downloadDataUrl(renderer.domElement.toDataURL('image/png'), `${design.name || '全屋设计'}-3D效果图.png`);
+        renderer.setPixelRatio(originalPixelRatio);
+        renderer.setSize(size.x, size.y, false);
+        renderer.render(scene, camera);
       }
-
-      renderer.render(scene, camera);
-      downloadDataUrl(renderer.domElement.toDataURL('image/png'), `${design.name || '全屋设计'}-3D效果图.png`);
-    }
-  }), [design.name]);
+    }),
+    [design]
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -121,6 +158,9 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.04;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.domElement.className = 'three-canvas';
@@ -135,8 +175,7 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
     sunLight.position.set(5, 8, 6);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.set(2048, 2048);
-    sunLight.shadow.camera.near = 0.5;
-    sunLight.shadow.camera.far = 50;
+    sunLight.shadow.bias = -0.00015;
     scene.add(sunLight);
     sunLightRef.current = sunLight;
 
@@ -204,7 +243,8 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
 
     const span = Math.max(widthMeters, depthMeters, 4);
     const settings = resolveRenderSettings(design);
-    applyLighting(ambientLight, sunLight, settings.lightMode);
+    applyEnvironment(scene, ambientLight, sunLight, settings);
+    applyShadowCamera(sunLight, span);
     applyCameraPreset(camera, controls, span, settings.cameraPreset);
   }, [design]);
 

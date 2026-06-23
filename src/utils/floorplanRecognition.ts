@@ -1,4 +1,4 @@
-import type { BackgroundImage, Wall } from '../types';
+import type { BackgroundImage, RecognitionMode, RecognitionWallSource, Wall } from '../types';
 import { createId, snapValue } from './geometry';
 
 type ScanBand = {
@@ -16,13 +16,23 @@ type Run = {
 
 type RecognizeOptions = {
   gridSize: number;
+  mode?: RecognitionMode;
+};
+
+export type RecognizedFloorplanWall = Wall & {
+  confidence: number;
+  source: RecognitionWallSource;
 };
 
 export type FloorplanRecognitionResult = {
-  walls: Wall[];
+  walls: RecognizedFloorplanWall[];
   horizontalCount: number;
   verticalCount: number;
   minWallLength: number;
+  mode: RecognitionMode;
+  rawWallCount: number;
+  candidateWallCount: number;
+  inferredWallCount: number;
 };
 
 const DARK_LUMA_THRESHOLD = 112;
@@ -242,16 +252,89 @@ const toWall = (
 
 const getWallLength = (wall: Wall) => Math.hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
 
-const dedupeWalls = (walls: Wall[], gridSize: number) => {
-  const result: Wall[] = [];
+const isHorizontalWall = (wall: Wall) => Math.abs(wall.start.y - wall.end.y) <= Math.abs(wall.start.x - wall.end.x);
+
+const getWallLineCoordinate = (wall: Wall) => (isHorizontalWall(wall) ? (wall.start.y + wall.end.y) / 2 : (wall.start.x + wall.end.x) / 2);
+
+const getWallRange = (wall: Wall): Run =>
+  isHorizontalWall(wall)
+    ? { start: Math.min(wall.start.x, wall.end.x), end: Math.max(wall.start.x, wall.end.x) }
+    : { start: Math.min(wall.start.y, wall.end.y), end: Math.max(wall.start.y, wall.end.y) };
+
+const getOverlapRatio = (left: Wall, right: Wall) => {
+  const overlap = getOverlap(getWallRange(left), getWallRange(right));
+  const shorterLength = Math.min(getWallLength(left), getWallLength(right));
+  return shorterLength > 0 ? overlap / shorterLength : 0;
+};
+
+const mergeParallelWalls = (walls: Wall[], gridSize: number) => {
+  const mergeDistance = Math.max(gridSize * 0.9, MAX_WALL_THICKNESS * 1.2);
+  const groups: Wall[][] = [];
 
   walls
     .slice()
     .sort((left, right) => getWallLength(right) - getWallLength(left))
     .forEach((wall) => {
-      const horizontal = Math.abs(wall.start.y - wall.end.y) < Math.abs(wall.start.x - wall.end.x);
+      const wallHorizontal = isHorizontalWall(wall);
+      const matchingGroup = groups.find((group) => {
+        const anchor = group[0];
+
+        return (
+          isHorizontalWall(anchor) === wallHorizontal &&
+          Math.abs(getWallLineCoordinate(anchor) - getWallLineCoordinate(wall)) <= mergeDistance &&
+          group.some((item) => getOverlapRatio(item, wall) > 0.45)
+        );
+      });
+
+      if (matchingGroup) {
+        matchingGroup.push(wall);
+        return;
+      }
+
+      groups.push([wall]);
+    });
+
+  return groups.map((group) => {
+    if (group.length === 1) {
+      return group[0];
+    }
+
+    const horizontal = isHorizontalWall(group[0]);
+    const totalLength = group.reduce((sum, wall) => sum + getWallLength(wall), 0) || 1;
+    const line = snapValue(
+      group.reduce((sum, wall) => sum + getWallLineCoordinate(wall) * getWallLength(wall), 0) / totalLength,
+      gridSize
+    );
+    const start = snapValue(Math.min(...group.map((wall) => getWallRange(wall).start)), gridSize);
+    const end = snapValue(Math.max(...group.map((wall) => getWallRange(wall).end)), gridSize);
+    const thickness = Math.round(group.reduce((sum, wall) => sum + wall.thickness, 0) / group.length);
+
+    return horizontal
+      ? {
+          ...group[0],
+          start: { x: start, y: line },
+          end: { x: end, y: line },
+          thickness
+        }
+      : {
+          ...group[0],
+          start: { x: line, y: start },
+          end: { x: line, y: end },
+          thickness
+        };
+  });
+};
+
+const dedupeWalls = (walls: Wall[], gridSize: number) => {
+  const result: Wall[] = [];
+
+  mergeParallelWalls(walls, gridSize)
+    .slice()
+    .sort((left, right) => getWallLength(right) - getWallLength(left))
+    .forEach((wall) => {
+      const horizontal = isHorizontalWall(wall);
       const duplicate = result.some((item) => {
-        const itemHorizontal = Math.abs(item.start.y - item.end.y) < Math.abs(item.start.x - item.end.x);
+        const itemHorizontal = isHorizontalWall(item);
 
         if (horizontal !== itemHorizontal) {
           return false;
@@ -259,18 +342,12 @@ const dedupeWalls = (walls: Wall[], gridSize: number) => {
 
         if (horizontal) {
           const sameLine = Math.abs(item.start.y - wall.start.y) <= gridSize / 2;
-          const overlap = getOverlap(
-            { start: Math.min(item.start.x, item.end.x), end: Math.max(item.start.x, item.end.x) },
-            { start: Math.min(wall.start.x, wall.end.x), end: Math.max(wall.start.x, wall.end.x) }
-          );
+          const overlap = getOverlap(getWallRange(item), getWallRange(wall));
           return sameLine && overlap > Math.min(getWallLength(item), getWallLength(wall)) * 0.72;
         }
 
         const sameLine = Math.abs(item.start.x - wall.start.x) <= gridSize / 2;
-        const overlap = getOverlap(
-          { start: Math.min(item.start.y, item.end.y), end: Math.max(item.start.y, item.end.y) },
-          { start: Math.min(wall.start.y, wall.end.y), end: Math.max(wall.start.y, wall.end.y) }
-        );
+        const overlap = getOverlap(getWallRange(item), getWallRange(wall));
         return sameLine && overlap > Math.min(getWallLength(item), getWallLength(wall)) * 0.72;
       });
 
@@ -282,27 +359,315 @@ const dedupeWalls = (walls: Wall[], gridSize: number) => {
   return result;
 };
 
+const isValueBetween = (value: number, start: number, end: number, tolerance: number) =>
+  value >= Math.min(start, end) - tolerance && value <= Math.max(start, end) + tolerance;
+
+const isPointNearWall = (point: { x: number; y: number }, wall: Wall, tolerance: number) => {
+  if (isHorizontalWall(wall)) {
+    return Math.abs(point.y - wall.start.y) <= tolerance && isValueBetween(point.x, wall.start.x, wall.end.x, tolerance);
+  }
+
+  return Math.abs(point.x - wall.start.x) <= tolerance && isValueBetween(point.y, wall.start.y, wall.end.y, tolerance);
+};
+
+const countConnectedEndpoints = (wall: Wall, walls: Wall[], tolerance: number) =>
+  [wall.start, wall.end].filter((point) => walls.some((item) => item.id !== wall.id && isPointNearWall(point, item, tolerance))).length;
+
+const countPerpendicularIntersections = (wall: Wall, walls: Wall[], tolerance: number) => {
+  const horizontal = isHorizontalWall(wall);
+  return walls.filter((item) => {
+    if (item.id === wall.id || isHorizontalWall(item) === horizontal) {
+      return false;
+    }
+
+    const horizontalWall = horizontal ? wall : item;
+    const verticalWall = horizontal ? item : wall;
+    return (
+      isValueBetween(verticalWall.start.x, horizontalWall.start.x, horizontalWall.end.x, tolerance) &&
+      isValueBetween(horizontalWall.start.y, verticalWall.start.y, verticalWall.end.y, tolerance)
+    );
+  }).length;
+};
+
+const areWallsConnected = (left: Wall, right: Wall, tolerance: number) => {
+  if (left.id === right.id) {
+    return false;
+  }
+
+  if (
+    isPointNearWall(left.start, right, tolerance) ||
+    isPointNearWall(left.end, right, tolerance) ||
+    isPointNearWall(right.start, left, tolerance) ||
+    isPointNearWall(right.end, left, tolerance)
+  ) {
+    return true;
+  }
+
+  if (isHorizontalWall(left) === isHorizontalWall(right)) {
+    return false;
+  }
+
+  const horizontalWall = isHorizontalWall(left) ? left : right;
+  const verticalWall = isHorizontalWall(left) ? right : left;
+  return (
+    isValueBetween(verticalWall.start.x, horizontalWall.start.x, horizontalWall.end.x, tolerance) &&
+    isValueBetween(horizontalWall.start.y, verticalWall.start.y, verticalWall.end.y, tolerance)
+  );
+};
+
+const getWallComponentData = (walls: Wall[], tolerance: number) => {
+  const neighbors = walls.map(() => new Set<number>());
+
+  walls.forEach((wall, wallIndex) => {
+    for (let itemIndex = wallIndex + 1; itemIndex < walls.length; itemIndex += 1) {
+      if (areWallsConnected(wall, walls[itemIndex], tolerance)) {
+        neighbors[wallIndex].add(itemIndex);
+        neighbors[itemIndex].add(wallIndex);
+      }
+    }
+  });
+
+  const componentIndexes = new Array<number>(walls.length).fill(-1);
+  const componentLengths: number[] = [];
+
+  walls.forEach((wall, wallIndex) => {
+    if (componentIndexes[wallIndex] !== -1) {
+      return;
+    }
+
+    const componentIndex = componentLengths.length;
+    const queue = [wallIndex];
+    componentIndexes[wallIndex] = componentIndex;
+    let componentLength = 0;
+
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+      const currentIndex = queue[queueIndex];
+      componentLength += getWallLength(walls[currentIndex]);
+      neighbors[currentIndex].forEach((nextIndex) => {
+        if (componentIndexes[nextIndex] !== -1) {
+          return;
+        }
+
+        componentIndexes[nextIndex] = componentIndex;
+        queue.push(nextIndex);
+      });
+    }
+
+    componentLengths.push(componentLength || getWallLength(wall));
+  });
+
+  return { neighbors, componentIndexes, componentLengths };
+};
+
+const getWallBounds = (walls: Wall[]) => {
+  const xValues = walls.flatMap((wall) => [wall.start.x, wall.end.x]);
+  const yValues = walls.flatMap((wall) => [wall.start.y, wall.end.y]);
+
+  return {
+    left: Math.min(...xValues),
+    right: Math.max(...xValues),
+    top: Math.min(...yValues),
+    bottom: Math.max(...yValues)
+  };
+};
+
+const getBoundaryScore = (wall: Wall, bounds: ReturnType<typeof getWallBounds>, tolerance: number) => {
+  if (isHorizontalWall(wall)) {
+    return Math.min(Math.abs(wall.start.y - bounds.top), Math.abs(wall.start.y - bounds.bottom)) <= tolerance ? 20 : 0;
+  }
+
+  return Math.min(Math.abs(wall.start.x - bounds.left), Math.abs(wall.start.x - bounds.right)) <= tolerance ? 20 : 0;
+};
+
+const scoreWallCandidate = ({
+  wall,
+  walls,
+  index,
+  gridSize,
+  imageSize,
+  minWallLength,
+  bounds,
+  neighbors,
+  componentIndexes,
+  componentLengths
+}: {
+  wall: Wall;
+  walls: Wall[];
+  index: number;
+  gridSize: number;
+  imageSize: number;
+  minWallLength: number;
+  bounds: ReturnType<typeof getWallBounds>;
+  neighbors: Array<Set<number>>;
+  componentIndexes: number[];
+  componentLengths: number[];
+}) => {
+  const tolerance = Math.max(gridSize * 0.65, 12);
+  const length = getWallLength(wall);
+  const longWallLength = Math.max(gridSize * 7, imageSize * 0.145);
+  const connectedEndpoints = countConnectedEndpoints(wall, walls, tolerance);
+  const intersections = countPerpendicularIntersections(wall, walls, tolerance);
+  const componentLength = componentLengths[componentIndexes[index]] ?? 0;
+  const componentScore = Math.min(22, (componentLength / Math.max(longWallLength * 2, 1)) * 12);
+  const lengthScore = Math.min(30, (length / Math.max(longWallLength, 1)) * 24);
+  const connectionScore = Math.min(26, connectedEndpoints * 9 + intersections * 7 + neighbors[index].size * 4);
+  const boundaryScore = getBoundaryScore(wall, bounds, Math.max(gridSize * 2.6, 64));
+  const thicknessScore = wall.thickness >= MIN_WALL_THICKNESS + 3 ? 8 : 0;
+  const shortIsolatedPenalty = length < minWallLength * 1.45 && connectedEndpoints === 0 && intersections === 0 ? 24 : 0;
+
+  return Math.max(0, Math.min(100, lengthScore + connectionScore + boundaryScore + componentScore + thicknessScore - shortIsolatedPenalty));
+};
+
+const toRecognizedWall = (wall: Wall, confidence: number, source: RecognitionWallSource): RecognizedFloorplanWall => ({
+  ...wall,
+  confidence: Math.round(confidence) / 100,
+  source
+});
+
+const getScoredWalls = (walls: Wall[], gridSize: number, imageSize: number, minWallLength: number) => {
+  if (walls.length === 0) {
+    return [];
+  }
+
+  const tolerance = Math.max(gridSize * 0.65, 12);
+  const bounds = getWallBounds(walls);
+  const { neighbors, componentIndexes, componentLengths } = getWallComponentData(walls, tolerance);
+
+  return walls.map((wall, index) => ({
+    wall,
+    score: scoreWallCandidate({
+      wall,
+      walls,
+      index,
+      gridSize,
+      imageSize,
+      minWallLength,
+      bounds,
+      neighbors,
+      componentIndexes,
+      componentLengths
+    })
+  }));
+};
+
+const filterRecognizedWalls = (
+  walls: Wall[],
+  gridSize: number,
+  imageSize: number,
+  minWallLength: number,
+  mode: RecognitionMode
+) => {
+  const threshold = mode === 'complete' ? 42 : 58;
+  const scoredWalls = getScoredWalls(walls, gridSize, imageSize, minWallLength);
+
+  return scoredWalls
+    .filter(({ score, wall }) => {
+      const length = getWallLength(wall);
+      const keepLongBoundary = mode === 'complete' && score >= 34 && length >= minWallLength * 1.35;
+      return score >= threshold || keepLongBoundary;
+    })
+    .map(({ wall, score }) => toRecognizedWall(wall, score, 'scan'));
+};
+
+const createBridgeWalls = (walls: RecognizedFloorplanWall[], gridSize: number, minWallLength: number) => {
+  const bridgeWalls: RecognizedFloorplanWall[] = [];
+  const lineTolerance = Math.max(gridSize * 0.8, 16);
+  const maxGap = Math.max(gridSize * 3.2, minWallLength * 0.72);
+
+  (['horizontal', 'vertical'] as const).forEach((orientation) => {
+    const orientedWalls = walls
+      .filter((wall) => (orientation === 'horizontal' ? isHorizontalWall(wall) : !isHorizontalWall(wall)))
+      .slice()
+      .sort((left, right) => getWallLineCoordinate(left) - getWallLineCoordinate(right) || getWallRange(left).start - getWallRange(right).start);
+    const groups: RecognizedFloorplanWall[][] = [];
+
+    orientedWalls.forEach((wall) => {
+      const group = groups.find((items) => Math.abs(getWallLineCoordinate(items[0]) - getWallLineCoordinate(wall)) <= lineTolerance);
+
+      if (group) {
+        group.push(wall);
+        return;
+      }
+
+      groups.push([wall]);
+    });
+
+    groups.forEach((group) => {
+      group.sort((left, right) => getWallRange(left).start - getWallRange(right).start);
+
+      for (let index = 0; index < group.length - 1; index += 1) {
+        const current = group[index];
+        const next = group[index + 1];
+        const currentRange = getWallRange(current);
+        const nextRange = getWallRange(next);
+        const gap = nextRange.start - currentRange.end;
+
+        if (gap <= 0 || gap > maxGap) {
+          continue;
+        }
+
+        const line = snapValue((getWallLineCoordinate(current) + getWallLineCoordinate(next)) / 2, gridSize);
+        const start = snapValue(currentRange.end, gridSize);
+        const end = snapValue(nextRange.start, gridSize);
+        const thickness = Math.round((current.thickness + next.thickness) / 2);
+        const confidence = Math.min(0.76, Math.max(0.46, (current.confidence + next.confidence) / 2 - gap / maxGap * 0.18));
+
+        bridgeWalls.push(
+          orientation === 'horizontal'
+            ? {
+                id: createId('auto-wall'),
+                start: { x: start, y: line },
+                end: { x: end, y: line },
+                thickness,
+                confidence,
+                source: 'inferred'
+              }
+            : {
+                id: createId('auto-wall'),
+                start: { x: line, y: start },
+                end: { x: line, y: end },
+                thickness,
+                confidence,
+                source: 'inferred'
+              }
+        );
+      }
+    });
+  });
+
+  return bridgeWalls;
+};
+
 export const recognizeFloorplanWalls = async (
   backgroundImage: BackgroundImage,
   options: RecognizeOptions
 ): Promise<FloorplanRecognitionResult> => {
   const { mask, width, height } = await createDarkMask(backgroundImage);
+  const mode = options.mode ?? 'complete';
   const minRunLength = Math.max(options.gridSize * 3, Math.min(width, height) * 0.055);
   const horizontalBands = extractBands(mask, width, height, 'horizontal', minRunLength);
   const verticalBands = extractBands(mask, width, height, 'vertical', minRunLength);
   const minWallLength = Math.max(options.gridSize * 4, Math.min(width, height) * 0.07);
-  const walls = dedupeWalls(
-    [
-      ...horizontalBands.map((band) => toWall(band, 'horizontal', backgroundImage, options.gridSize)),
-      ...verticalBands.map((band) => toWall(band, 'vertical', backgroundImage, options.gridSize))
-    ].filter((wall) => getWallLength(wall) >= minWallLength),
+  const rawWalls = [
+    ...horizontalBands.map((band) => toWall(band, 'horizontal', backgroundImage, options.gridSize)),
+    ...verticalBands.map((band) => toWall(band, 'vertical', backgroundImage, options.gridSize))
+  ];
+  const candidateWalls = dedupeWalls(
+    rawWalls.filter((wall) => getWallLength(wall) >= minWallLength),
     options.gridSize
   );
+  const recognizedWalls = filterRecognizedWalls(candidateWalls, options.gridSize, Math.min(width, height), minWallLength, mode);
+  const inferredWalls = mode === 'complete' ? createBridgeWalls(recognizedWalls, options.gridSize, minWallLength) : [];
+  const walls = [...recognizedWalls, ...inferredWalls];
 
   return {
     walls,
-    horizontalCount: horizontalBands.length,
-    verticalCount: verticalBands.length,
-    minWallLength
+    horizontalCount: walls.filter((wall) => isHorizontalWall(wall)).length,
+    verticalCount: walls.filter((wall) => !isHorizontalWall(wall)).length,
+    minWallLength,
+    mode,
+    rawWallCount: rawWalls.length,
+    candidateWallCount: candidateWalls.length,
+    inferredWallCount: inferredWalls.length
   };
 };
