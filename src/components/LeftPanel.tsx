@@ -36,6 +36,8 @@ type LeftPanelProps = {
   onSearchChange: (value: string) => void;
   onFurnitureDragStart: (item: FurnitureDefinition) => void;
   onFurnitureComboDragStart: (item: FurnitureComboDefinition) => void;
+  onFurnitureClick: (item: FurnitureDefinition) => void;
+  onFurnitureComboClick: (item: FurnitureComboDefinition) => void;
   onToggleFurnitureFavorite: (id: string) => void;
   onToggleFurnitureComboFavorite: (id: string) => void;
 };
@@ -95,6 +97,8 @@ export default function LeftPanel({
   onSearchChange,
   onFurnitureDragStart,
   onFurnitureComboDragStart,
+  onFurnitureClick,
+  onFurnitureComboClick,
   onToggleFurnitureFavorite,
   onToggleFurnitureComboFavorite
 }: LeftPanelProps) {
@@ -275,9 +279,23 @@ export default function LeftPanel({
                 className="furniture-item furniture-combo-item"
                 draggable
                 key={combo.id}
+                role="button"
+                tabIndex={0}
+                title="点击添加到画布中心，也可以拖拽到指定位置"
                 onDragStart={(event) => {
                   event.dataTransfer.setData('text/plain', `combo:${combo.id}`);
                   onFurnitureComboDragStart(combo);
+                }}
+                onClick={() => onFurnitureComboClick(combo)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) {
+                    return;
+                  }
+
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onFurnitureComboClick(combo);
+                  }
                 }}
               >
                 <span className="furniture-swatch combo-swatch">
@@ -316,9 +334,23 @@ export default function LeftPanel({
                 className="furniture-item"
                 draggable
                 key={item.id}
+                role="button"
+                tabIndex={0}
+                title="点击添加到画布中心，也可以拖拽到指定位置"
                 onDragStart={(event) => {
                   event.dataTransfer.setData('text/plain', item.id);
                   onFurnitureDragStart(item);
+                }}
+                onClick={() => onFurnitureClick(item)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) {
+                    return;
+                  }
+
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onFurnitureClick(item);
+                  }
                 }}
               >
                 <span className="furniture-swatch" style={{ background: item.color, borderColor: item.accentColor }} />

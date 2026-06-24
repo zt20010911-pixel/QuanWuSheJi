@@ -7,6 +7,7 @@ import PropertiesPanel from './components/PropertiesPanel';
 import SelectedFurnitureToolbar from './components/SelectedFurnitureToolbar';
 import ThreeDViewer, { type ThreeDViewerHandle } from './components/ThreeDViewer';
 import TopBar from './components/TopBar';
+import { FURNITURE_LIBRARY } from './data/furniture';
 import { DESIGN_TEMPLATES, cloneTemplateDesign, createEmptyDesign } from './data/templates';
 import { DEFAULT_MATERIAL_BRUSH, resolveFurnitureMaterial } from './data/furnitureMaterials';
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS } from './data/materials';
@@ -38,7 +39,7 @@ import type {
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
 import { createDeliveryHtml, createDxfDraft, createModelDraft, createPlanSvg } from './utils/designExport';
 import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
-import { createId } from './utils/geometry';
+import { createId, snapPoint } from './utils/geometry';
 import {
   DEFAULT_RECOGNITION_CANDIDATE_FILTERS,
   normalizeDesign,
@@ -1132,6 +1133,100 @@ export default function App() {
     setDraggedFurnitureId(`combo:${item.id}`);
   };
 
+  const getViewportCenterPoint = useCallback((): Point => {
+    const stage = stageRef.current;
+    const width = stage?.width() ?? window.innerWidth;
+    const height = stage?.height() ?? window.innerHeight;
+
+    return snapPoint(
+      {
+        x: (width / 2 - stagePosition.x) / zoom,
+        y: (height / 2 - stagePosition.y) / zoom
+      },
+      design.canvas.gridSize
+    );
+  }, [design.canvas.gridSize, stagePosition.x, stagePosition.y, zoom]);
+
+  const addFurnitureToViewportCenter = useCallback(
+    (item: FurnitureDefinition) => {
+      const position = getViewportCenterPoint();
+      const instanceId = createId('furniture');
+      const nextFurniture = normalizeFurnitureInstance({
+        ...item,
+        instanceId,
+        x: position.x,
+        y: position.y,
+        rotation: 0
+      });
+
+      commitChange(
+        (current) => ({
+          ...current,
+          furniture: [...current.furniture, nextFurniture]
+        }),
+        { type: 'furniture', id: instanceId }
+      );
+      setMode('select');
+      setDraggedFurnitureId(null);
+      setStatusText(`已添加 ${item.name}`);
+    },
+    [commitChange, getViewportCenterPoint]
+  );
+
+  const addFurnitureComboToViewportCenter = useCallback(
+    (combo: FurnitureComboDefinition) => {
+      const position = getViewportCenterPoint();
+      const groupId = createId('furniture-group');
+      const nextFurniture = combo.items.reduce<FurnitureInstance[]>((items, comboItem) => {
+        const definition = FURNITURE_LIBRARY.find((item) => item.id === comboItem.furnitureId);
+
+        if (!definition) {
+          return items;
+        }
+
+        const itemPosition = snapPoint(
+          {
+            x: position.x + (comboItem.offsetX / 100) * design.canvas.scalePxPerMeter,
+            y: position.y + (comboItem.offsetY / 100) * design.canvas.scalePxPerMeter
+          },
+          design.canvas.gridSize
+        );
+
+        items.push(
+          normalizeFurnitureInstance({
+            ...definition,
+            instanceId: createId('furniture'),
+            x: itemPosition.x,
+            y: itemPosition.y,
+            rotation: comboItem.rotation ?? 0,
+            groupId,
+            groupName: combo.name,
+            comboDefinitionId: combo.id
+          })
+        );
+
+        return items;
+      }, []);
+
+      if (nextFurniture.length === 0) {
+        setStatusText('组合家具缺少可用子项');
+        return;
+      }
+
+      commitChange(
+        (current) => ({
+          ...current,
+          furniture: [...current.furniture, ...nextFurniture]
+        }),
+        { type: 'furnitureGroup', id: groupId }
+      );
+      setMode('select');
+      setDraggedFurnitureId(null);
+      setStatusText(`已添加组合 ${combo.name}`);
+    },
+    [commitChange, design.canvas.gridSize, design.canvas.scalePxPerMeter, getViewportCenterPoint]
+  );
+
   const handleBackgroundUpload = async (file: File) => {
     resetWallDraft();
     const backgroundImage = await createBackgroundImage(file, design.canvas.width, design.canvas.height);
@@ -1844,6 +1939,8 @@ export default function App() {
           onSearchChange={setSearchText}
           onFurnitureDragStart={handleFurnitureDragStart}
           onFurnitureComboDragStart={handleFurnitureComboDragStart}
+          onFurnitureClick={addFurnitureToViewportCenter}
+          onFurnitureComboClick={addFurnitureComboToViewportCenter}
           onToggleFurnitureFavorite={toggleFurnitureFavorite}
           onToggleFurnitureComboFavorite={toggleFurnitureComboFavorite}
         />
