@@ -18,11 +18,13 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 8;
+export const DESIGN_DOCUMENT_VERSION = 10;
 
 export type Selection =
   | { type: 'wall'; id: string }
   | { type: 'recognitionWall'; id: string }
+  | { type: 'recognitionOpeningCandidate'; id: string }
+  | { type: 'recognitionRoomCandidate'; id: string }
   | { type: 'opening'; id: string }
   | { type: 'furniture'; id: string }
   | { type: 'furnitureGroup'; id: string }
@@ -249,9 +251,13 @@ export type RecognitionStatus = 'draft' | 'confirmed';
 
 export type RecognitionMode = 'complete' | 'precise';
 
-export type RecognitionWallSource = 'scan' | 'merged' | 'inferred';
+export type RecognitionCandidateStatus = 'active' | 'deleted' | 'promoted';
 
-export type RecognitionWallStatus = 'active' | 'deleted' | 'promoted';
+export type RecognitionCandidateSource = 'scan' | 'gap' | 'graph' | 'inferred' | 'manual' | 'ai-draft';
+
+export type RecognitionWallSource = RecognitionCandidateSource | 'merged';
+
+export type RecognitionWallStatus = RecognitionCandidateStatus;
 
 export type RecognitionWall = Wall & {
   status: RecognitionWallStatus;
@@ -259,6 +265,65 @@ export type RecognitionWall = Wall & {
   source?: RecognitionWallSource;
   promotedWallId?: string;
   updatedAt?: string;
+};
+
+export type RecognitionOpeningCandidate = {
+  id: string;
+  kind: OpeningKind;
+  wallId?: string;
+  x: number;
+  y: number;
+  width: number;
+  rotation: number;
+  status: RecognitionCandidateStatus;
+  confidence?: number;
+  source?: RecognitionCandidateSource;
+  promotedOpeningId?: string;
+  updatedAt?: string;
+};
+
+export type RecognitionRoomCandidate = {
+  id: string;
+  name?: string;
+  points: Point[];
+  label: Point;
+  areaSqm?: number;
+  status: RecognitionCandidateStatus;
+  confidence?: number;
+  source?: RecognitionCandidateSource;
+  promotedRoomZoneId?: string;
+  updatedAt?: string;
+};
+
+export type RecognitionQualityReport = {
+  outerFrameCoverage: number;
+  disconnectedEndpointCount: number;
+  lowConfidenceCount: number;
+  possibleFurnitureNoiseCount: number;
+  suggestionMessages: string[];
+};
+
+export type RecognitionCandidateFilters = {
+  showWalls: boolean;
+  showOpenings: boolean;
+  showRooms: boolean;
+  showLowConfidenceOnly: boolean;
+  showDeleted: boolean;
+  showPromoted: boolean;
+};
+
+export type AiRecognitionDraft = {
+  id: string;
+  status: 'draft';
+  createdAt: string;
+  sourceFileName: string;
+  mode: RecognitionMode;
+  inputSnapshot: {
+    backgroundFileName: string;
+    scalePxPerMeter: number;
+    gridSize: number;
+  };
+  note: string;
 };
 
 export type RecognitionSession = {
@@ -270,7 +335,14 @@ export type RecognitionSession = {
   opacity: number;
   locked: boolean;
   selectedWallIds: string[];
+  selectedOpeningCandidateIds?: string[];
+  selectedRoomCandidateIds?: string[];
   walls: RecognitionWall[];
+  openingCandidates?: RecognitionOpeningCandidate[];
+  roomCandidates?: RecognitionRoomCandidate[];
+  qualityReport?: RecognitionQualityReport;
+  candidateFilters?: RecognitionCandidateFilters;
+  aiRecognitionDraft?: AiRecognitionDraft;
   wallCount: number;
   horizontalCount: number;
   verticalCount: number;
@@ -308,7 +380,7 @@ export type RenderSettings = {
 
 export type CloudTaskDraft = {
   id: string;
-  kind: 'ai-render';
+  kind: 'ai-render' | 'floorplan-recognition';
   status: 'draft' | 'idle';
   createdAt: string;
   inputDesignId: string;
@@ -324,9 +396,46 @@ export type ProjectMeta = {
   notes?: string;
 };
 
+export type PrintPaperSize = 'A4' | 'A3';
+
+export type PrintOrientation = 'portrait' | 'landscape';
+
+export type PrintScaleMode = 'fit' | 'fixed';
+
+export type PrintSettings = {
+  paperSize: PrintPaperSize;
+  orientation: PrintOrientation;
+  scaleMode: PrintScaleMode;
+  showBackground: boolean;
+  showGrid: boolean;
+  showWallLengths: boolean;
+  showRoomAreas: boolean;
+  showLegend: boolean;
+  showBudgetSummary: boolean;
+};
+
+export type ExportDraftSettings = {
+  includeBackgroundInSvg: boolean;
+  includeRecognitionLayer: boolean;
+  dxfUnit: 'meter' | 'millimeter';
+  modelUnit: 'meter';
+  draftNotice: string;
+};
+
 export type ExportHistoryEntry = {
   id: string;
-  kind: 'png' | 'json' | 'html-report' | 'csv-estimate' | '3d-png';
+  kind:
+    | 'png'
+    | 'json'
+    | 'html-report'
+    | 'csv-estimate'
+    | '3d-png'
+    | 'svg-plan'
+    | 'pdf-report'
+    | 'print-layout'
+    | 'dxf-draft'
+    | 'glb-draft'
+    | 'obj-draft';
   fileName: string;
   createdAt: string;
 };
@@ -378,6 +487,8 @@ export type DesignDocument = {
   features?: Record<FeatureModuleKey, FeatureModuleStatus>;
   projectMeta?: ProjectMeta;
   exportHistory?: ExportHistoryEntry[];
+  printSettings?: PrintSettings;
+  exportDraftSettings?: ExportDraftSettings;
   collaborationDraft?: CollaborationDraft;
   mobileCaptureDraft?: MobileCaptureDraft;
   aiDesignDraft?: AiDesignDraft;

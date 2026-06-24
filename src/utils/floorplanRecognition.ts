@@ -1,4 +1,13 @@
-import type { BackgroundImage, RecognitionMode, RecognitionWallSource, Wall } from '../types';
+import type {
+  BackgroundImage,
+  Point,
+  RecognitionMode,
+  RecognitionOpeningCandidate,
+  RecognitionQualityReport,
+  RecognitionRoomCandidate,
+  RecognitionWallSource,
+  Wall
+} from '../types';
 import { createId, snapValue } from './geometry';
 
 type ScanBand = {
@@ -16,6 +25,7 @@ type Run = {
 
 type RecognizeOptions = {
   gridSize: number;
+  scalePxPerMeter: number;
   mode?: RecognitionMode;
 };
 
@@ -26,6 +36,9 @@ export type RecognizedFloorplanWall = Wall & {
 
 export type FloorplanRecognitionResult = {
   walls: RecognizedFloorplanWall[];
+  openingCandidates: RecognitionOpeningCandidate[];
+  roomCandidates: RecognitionRoomCandidate[];
+  qualityReport: RecognitionQualityReport;
   horizontalCount: number;
   verticalCount: number;
   minWallLength: number;
@@ -638,6 +651,300 @@ const createBridgeWalls = (walls: RecognizedFloorplanWall[], gridSize: number, m
   return bridgeWalls;
 };
 
+const getUnionLength = (ranges: Run[]) => {
+  if (ranges.length === 0) {
+    return 0;
+  }
+
+  const sortedRanges = ranges
+    .map((range) => ({ start: Math.min(range.start, range.end), end: Math.max(range.start, range.end) }))
+    .sort((left, right) => left.start - right.start);
+  let total = 0;
+  let current = sortedRanges[0];
+
+  for (let index = 1; index < sortedRanges.length; index += 1) {
+    const next = sortedRanges[index];
+
+    if (next.start <= current.end) {
+      current = { start: current.start, end: Math.max(current.end, next.end) };
+      continue;
+    }
+
+    total += current.end - current.start;
+    current = next;
+  }
+
+  total += current.end - current.start;
+  return total;
+};
+
+const getWallCoverageOnLine = (
+  walls: Wall[],
+  orientation: 'horizontal' | 'vertical',
+  lineCoordinate: number,
+  start: number,
+  end: number,
+  tolerance: number
+) => {
+  const ranges = walls
+    .filter((wall) => (orientation === 'horizontal' ? isHorizontalWall(wall) : !isHorizontalWall(wall)))
+    .filter((wall) => Math.abs(getWallLineCoordinate(wall) - lineCoordinate) <= tolerance)
+    .map((wall) => {
+      const range = getWallRange(wall);
+      return {
+        start: Math.max(Math.min(start, end), range.start),
+        end: Math.min(Math.max(start, end), range.end)
+      };
+    })
+    .filter((range) => range.end > range.start);
+
+  return getUnionLength(ranges);
+};
+
+const clusterAxisValues = (values: number[], tolerance: number) => {
+  const clusters: number[][] = [];
+
+  values
+    .slice()
+    .sort((left, right) => left - right)
+    .forEach((value) => {
+      const cluster = clusters.find((items) => Math.abs(items.reduce((sum, item) => sum + item, 0) / items.length - value) <= tolerance);
+
+      if (cluster) {
+        cluster.push(value);
+        return;
+      }
+
+      clusters.push([value]);
+    });
+
+  return clusters
+    .map((items) => snapValue(items.reduce((sum, item) => sum + item, 0) / items.length, tolerance))
+    .filter((value, index, items) => index === 0 || Math.abs(value - items[index - 1]) > tolerance)
+    .sort((left, right) => left - right);
+};
+
+const createOpeningCandidates = (
+  scanWalls: RecognizedFloorplanWall[],
+  finalWalls: RecognizedFloorplanWall[],
+  gridSize: number,
+  scalePxPerMeter: number
+): RecognitionOpeningCandidate[] => {
+  const candidates: RecognitionOpeningCandidate[] = [];
+  if (scanWalls.length === 0 && finalWalls.length === 0) {
+    return candidates;
+  }
+
+  const bounds = getWallBounds(finalWalls.length ? finalWalls : scanWalls);
+  const lineTolerance = Math.max(gridSize * 0.8, 16);
+  const minGapPx = scalePxPerMeter * 0.55;
+  const maxGapPx = scalePxPerMeter * 2.4;
+  const boundaryTolerance = Math.max(gridSize * 2.4, 72);
+
+  (['horizontal', 'vertical'] as const).forEach((orientation) => {
+    const orientedWalls = scanWalls
+      .filter((wall) => (orientation === 'horizontal' ? isHorizontalWall(wall) : !isHorizontalWall(wall)))
+      .slice()
+      .sort((left, right) => getWallLineCoordinate(left) - getWallLineCoordinate(right) || getWallRange(left).start - getWallRange(right).start);
+    const groups: RecognizedFloorplanWall[][] = [];
+
+    orientedWalls.forEach((wall) => {
+      const group = groups.find((items) => Math.abs(getWallLineCoordinate(items[0]) - getWallLineCoordinate(wall)) <= lineTolerance);
+
+      if (group) {
+        group.push(wall);
+        return;
+      }
+
+      groups.push([wall]);
+    });
+
+    groups.forEach((group) => {
+      group.sort((left, right) => getWallRange(left).start - getWallRange(right).start);
+
+      for (let index = 0; index < group.length - 1; index += 1) {
+        const current = group[index];
+        const next = group[index + 1];
+        const currentRange = getWallRange(current);
+        const nextRange = getWallRange(next);
+        const gap = nextRange.start - currentRange.end;
+
+        if (gap < minGapPx || gap > maxGapPx) {
+          continue;
+        }
+
+        const line = snapValue((getWallLineCoordinate(current) + getWallLineCoordinate(next)) / 2, gridSize);
+        const start = snapValue(currentRange.end, gridSize);
+        const end = snapValue(nextRange.start, gridSize);
+        const center = (start + end) / 2;
+        const onOuterFrame =
+          orientation === 'horizontal'
+            ? Math.min(Math.abs(line - bounds.top), Math.abs(line - bounds.bottom)) <= boundaryTolerance
+            : Math.min(Math.abs(line - bounds.left), Math.abs(line - bounds.right)) <= boundaryTolerance;
+        const gapMeters = gap / scalePxPerMeter;
+        const kind = onOuterFrame && gapMeters >= 0.8 ? 'window' : 'door';
+        const confidence = Math.min(
+          0.9,
+          Math.max(0.48, (current.confidence + next.confidence) / 2 - Math.abs(gapMeters - (kind === 'door' ? 0.9 : 1.35)) * 0.08)
+        );
+
+        candidates.push({
+          id: createId('rec-opening'),
+          kind,
+          wallId: current.id,
+          x: orientation === 'horizontal' ? center : line,
+          y: orientation === 'horizontal' ? line : center,
+          width: Math.max(40, Math.round(gapMeters * 100)),
+          rotation: orientation === 'horizontal' ? 0 : 90,
+          status: 'active',
+          confidence,
+          source: 'gap'
+        });
+      }
+    });
+  });
+
+  return candidates.slice(0, 28);
+};
+
+const createRoomCandidates = (
+  walls: RecognizedFloorplanWall[],
+  gridSize: number,
+  scalePxPerMeter: number
+): RecognitionRoomCandidate[] => {
+  const horizontalWalls = walls.filter(isHorizontalWall);
+  const verticalWalls = walls.filter((wall) => !isHorizontalWall(wall));
+  const lineTolerance = Math.max(gridSize * 1.1, 18);
+  const minRoomSide = scalePxPerMeter * 1.2;
+  const maxRoomArea = 90;
+  const xLines = clusterAxisValues(verticalWalls.map(getWallLineCoordinate), lineTolerance);
+  const yLines = clusterAxisValues(horizontalWalls.map(getWallLineCoordinate), lineTolerance);
+  const candidates: RecognitionRoomCandidate[] = [];
+
+  for (let xIndex = 0; xIndex < xLines.length - 1; xIndex += 1) {
+    for (let yIndex = 0; yIndex < yLines.length - 1; yIndex += 1) {
+      const left = xLines[xIndex];
+      const right = xLines[xIndex + 1];
+      const top = yLines[yIndex];
+      const bottom = yLines[yIndex + 1];
+      const width = right - left;
+      const height = bottom - top;
+
+      if (width < minRoomSide || height < minRoomSide) {
+        continue;
+      }
+
+      const areaSqm = (width / scalePxPerMeter) * (height / scalePxPerMeter);
+
+      if (areaSqm < 2.2 || areaSqm > maxRoomArea) {
+        continue;
+      }
+
+      const topCoverage = getWallCoverageOnLine(walls, 'horizontal', top, left, right, lineTolerance) / width;
+      const bottomCoverage = getWallCoverageOnLine(walls, 'horizontal', bottom, left, right, lineTolerance) / width;
+      const leftCoverage = getWallCoverageOnLine(walls, 'vertical', left, top, bottom, lineTolerance) / height;
+      const rightCoverage = getWallCoverageOnLine(walls, 'vertical', right, top, bottom, lineTolerance) / height;
+      const coverageValues = [topCoverage, bottomCoverage, leftCoverage, rightCoverage];
+      const strongEdges = coverageValues.filter((coverage) => coverage >= 0.46).length;
+      const averageCoverage = coverageValues.reduce((sum, coverage) => sum + coverage, 0) / coverageValues.length;
+
+      if (strongEdges < 3 || averageCoverage < 0.52) {
+        continue;
+      }
+
+      const points: Point[] = [
+        { x: left, y: top },
+        { x: right, y: top },
+        { x: right, y: bottom },
+        { x: left, y: bottom }
+      ];
+
+      candidates.push({
+        id: createId('rec-room'),
+        name: `识别房间 ${candidates.length + 1}`,
+        points,
+        label: { x: (left + right) / 2, y: (top + bottom) / 2 },
+        areaSqm: Math.round(areaSqm * 10) / 10,
+        status: 'active',
+        confidence: Math.min(0.88, Math.max(0.45, averageCoverage)),
+        source: 'graph'
+      });
+    }
+  }
+
+  return candidates
+    .sort((left, right) => (right.confidence ?? 0) - (left.confidence ?? 0) || (right.areaSqm ?? 0) - (left.areaSqm ?? 0))
+    .slice(0, 16);
+};
+
+const getOuterFrameCoverage = (walls: RecognizedFloorplanWall[], gridSize: number) => {
+  if (walls.length === 0) {
+    return 0;
+  }
+
+  const bounds = getWallBounds(walls);
+  const tolerance = Math.max(gridSize * 1.4, 24);
+  const width = Math.max(1, bounds.right - bounds.left);
+  const height = Math.max(1, bounds.bottom - bounds.top);
+  const topCoverage = getWallCoverageOnLine(walls, 'horizontal', bounds.top, bounds.left, bounds.right, tolerance) / width;
+  const bottomCoverage = getWallCoverageOnLine(walls, 'horizontal', bounds.bottom, bounds.left, bounds.right, tolerance) / width;
+  const leftCoverage = getWallCoverageOnLine(walls, 'vertical', bounds.left, bounds.top, bounds.bottom, tolerance) / height;
+  const rightCoverage = getWallCoverageOnLine(walls, 'vertical', bounds.right, bounds.top, bounds.bottom, tolerance) / height;
+
+  return Math.round(((topCoverage + bottomCoverage + leftCoverage + rightCoverage) / 4) * 100) / 100;
+};
+
+const createQualityReport = (
+  walls: RecognizedFloorplanWall[],
+  openingCandidates: RecognitionOpeningCandidate[],
+  roomCandidates: RecognitionRoomCandidate[],
+  gridSize: number,
+  scalePxPerMeter: number
+): RecognitionQualityReport => {
+  const tolerance = Math.max(gridSize * 0.8, 16);
+  const outerFrameCoverage = getOuterFrameCoverage(walls, gridSize);
+  const disconnectedEndpointCount = walls.reduce((count, wall) => {
+    const connectedCount = countConnectedEndpoints(wall, walls, tolerance);
+    return count + Math.max(0, 2 - connectedCount);
+  }, 0);
+  const lowConfidenceCount =
+    walls.filter((wall) => wall.confidence < 0.55).length +
+    openingCandidates.filter((candidate) => (candidate.confidence ?? 0) < 0.55).length +
+    roomCandidates.filter((candidate) => (candidate.confidence ?? 0) < 0.55).length;
+  const possibleFurnitureNoiseCount = walls.filter(
+    (wall) => getWallLength(wall) < scalePxPerMeter * 1.45 && countConnectedEndpoints(wall, walls, tolerance) === 0
+  ).length;
+  const suggestionMessages: string[] = [];
+
+  if (outerFrameCoverage < 0.72) {
+    suggestionMessages.push('外框覆盖不完整，建议检查阳台、外墙缺口或切换完整模式重新识别。');
+  }
+
+  if (disconnectedEndpointCount > 8) {
+    suggestionMessages.push('断开的墙体端点较多，建议先合并候选墙，再写入正式方案。');
+  }
+
+  if (lowConfidenceCount > 0) {
+    suggestionMessages.push('存在低置信候选，写入前建议只保留与底图吻合的墙体、门窗和房间。');
+  }
+
+  if (possibleFurnitureNoiseCount > 3) {
+    suggestionMessages.push('检测到疑似家具线条，建议用候选筛选隐藏低置信结果后再批量写入。');
+  }
+
+  if (suggestionMessages.length === 0) {
+    suggestionMessages.push('识别质量较稳定，可按墙体、门窗、房间分组确认写入。');
+  }
+
+  return {
+    outerFrameCoverage,
+    disconnectedEndpointCount,
+    lowConfidenceCount,
+    possibleFurnitureNoiseCount,
+    suggestionMessages
+  };
+};
+
 export const recognizeFloorplanWalls = async (
   backgroundImage: BackgroundImage,
   options: RecognizeOptions
@@ -659,9 +966,15 @@ export const recognizeFloorplanWalls = async (
   const recognizedWalls = filterRecognizedWalls(candidateWalls, options.gridSize, Math.min(width, height), minWallLength, mode);
   const inferredWalls = mode === 'complete' ? createBridgeWalls(recognizedWalls, options.gridSize, minWallLength) : [];
   const walls = [...recognizedWalls, ...inferredWalls];
+  const openingCandidates = createOpeningCandidates(recognizedWalls, walls, options.gridSize, options.scalePxPerMeter);
+  const roomCandidates = createRoomCandidates(walls, options.gridSize, options.scalePxPerMeter);
+  const qualityReport = createQualityReport(walls, openingCandidates, roomCandidates, options.gridSize, options.scalePxPerMeter);
 
   return {
     walls,
+    openingCandidates,
+    roomCandidates,
+    qualityReport,
     horizontalCount: walls.filter((wall) => isHorizontalWall(wall)).length,
     verticalCount: walls.filter((wall) => !isHorizontalWall(wall)).length,
     minWallLength,

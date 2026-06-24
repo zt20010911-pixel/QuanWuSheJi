@@ -1,9 +1,15 @@
 import {
   DESIGN_DOCUMENT_VERSION,
   type DesignDocument,
+  type ExportDraftSettings,
   type FurnitureInstance,
   type FurnitureProductInfo,
   type ModelExportDraft,
+  type PrintSettings,
+  type RecognitionCandidateFilters,
+  type RecognitionOpeningCandidate,
+  type RecognitionQualityReport,
+  type RecognitionRoomCandidate,
   type RecognitionWall,
   type RenderSettings,
   type Wall
@@ -23,6 +29,43 @@ export const DEFAULT_RENDER_SETTINGS: RenderSettings = {
   showBackgroundIn3D: false,
   showRoomMaterialsIn3D: true,
   showCeilingHint: false
+};
+
+export const DEFAULT_RECOGNITION_CANDIDATE_FILTERS: RecognitionCandidateFilters = {
+  showWalls: true,
+  showOpenings: true,
+  showRooms: true,
+  showLowConfidenceOnly: false,
+  showDeleted: false,
+  showPromoted: true
+};
+
+export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
+  paperSize: 'A4',
+  orientation: 'landscape',
+  scaleMode: 'fit',
+  showBackground: false,
+  showGrid: true,
+  showWallLengths: true,
+  showRoomAreas: true,
+  showLegend: true,
+  showBudgetSummary: true
+};
+
+export const DEFAULT_EXPORT_DRAFT_SETTINGS: ExportDraftSettings = {
+  includeBackgroundInSvg: false,
+  includeRecognitionLayer: false,
+  dxfUnit: 'millimeter',
+  modelUnit: 'meter',
+  draftNotice: '草案格式仅用于后续专业格式接入，不等同于正式 CAD/BIM 文件。'
+};
+
+const DEFAULT_RECOGNITION_QUALITY_REPORT: RecognitionQualityReport = {
+  outerFrameCoverage: 0,
+  disconnectedEndpointCount: 0,
+  lowConfidenceCount: 0,
+  possibleFurnitureNoiseCount: 0,
+  suggestionMessages: ['暂无质量报告，请重新识别户型图。']
 };
 
 const DEFAULT_COLLABORATION_DRAFT = {
@@ -121,6 +164,24 @@ export const normalizeRecognitionWall = (wall: Wall | RecognitionWall): Recognit
   };
 };
 
+const normalizeRecognitionOpeningCandidate = (candidate: RecognitionOpeningCandidate): RecognitionOpeningCandidate => ({
+  ...candidate,
+  status: candidate.status ?? 'active',
+  confidence: candidate.confidence ?? 0.68,
+  source: candidate.source ?? 'gap',
+  updatedAt: candidate.updatedAt
+});
+
+const normalizeRecognitionRoomCandidate = (candidate: RecognitionRoomCandidate): RecognitionRoomCandidate => ({
+  ...candidate,
+  status: candidate.status ?? 'active',
+  confidence: candidate.confidence ?? 0.62,
+  source: candidate.source ?? 'graph',
+  points: candidate.points ?? [],
+  label: candidate.label ?? candidate.points?.[0] ?? { x: 0, y: 0 },
+  updatedAt: candidate.updatedAt
+});
+
 const normalizeRoomZone = (zone: NonNullable<DesignDocument['roomZones']>[number], index: number) => ({
   ...zone,
   name: zone.name || `房间区域${index + 1}`,
@@ -149,7 +210,20 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
         opacity: design.recognition.opacity ?? 0.72,
         locked: design.recognition.locked ?? false,
         selectedWallIds: design.recognition.selectedWallIds ?? [],
+        selectedOpeningCandidateIds: design.recognition.selectedOpeningCandidateIds ?? [],
+        selectedRoomCandidateIds: design.recognition.selectedRoomCandidateIds ?? [],
         walls: design.recognition.walls.map(normalizeRecognitionWall),
+        openingCandidates: (design.recognition.openingCandidates ?? []).map(normalizeRecognitionOpeningCandidate),
+        roomCandidates: (design.recognition.roomCandidates ?? []).map(normalizeRecognitionRoomCandidate),
+        qualityReport: {
+          ...DEFAULT_RECOGNITION_QUALITY_REPORT,
+          ...(design.recognition.qualityReport ?? {})
+        },
+        candidateFilters: {
+          ...DEFAULT_RECOGNITION_CANDIDATE_FILTERS,
+          ...(design.recognition.candidateFilters ?? {})
+        },
+        aiRecognitionDraft: design.recognition.aiRecognitionDraft,
         wallCount: design.recognition.walls.map(normalizeRecognitionWall).filter((wall) => wall.status !== 'deleted').length,
         confidence: design.recognition.confidence ?? '中',
         parameters: {
@@ -190,6 +264,14 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
   },
   projectMeta: design.projectMeta ?? {},
   exportHistory: design.exportHistory ?? [],
+  printSettings: {
+    ...DEFAULT_PRINT_SETTINGS,
+    ...(design.printSettings ?? {})
+  },
+  exportDraftSettings: {
+    ...DEFAULT_EXPORT_DRAFT_SETTINGS,
+    ...(design.exportDraftSettings ?? {})
+  },
   collaborationDraft: design.collaborationDraft ?? DEFAULT_COLLABORATION_DRAFT,
   mobileCaptureDraft: design.mobileCaptureDraft ?? DEFAULT_MOBILE_CAPTURE_DRAFT,
   aiDesignDraft: design.aiDesignDraft ?? DEFAULT_AI_DESIGN_DRAFT,

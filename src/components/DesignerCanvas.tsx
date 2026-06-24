@@ -377,14 +377,20 @@ export default function DesignerCanvas({
     if (mode === 'select') {
       onSelectionChange(null);
 
-      if (design.recognition?.selectedWallIds.length) {
+      if (
+        design.recognition?.selectedWallIds.length ||
+        design.recognition?.selectedOpeningCandidateIds?.length ||
+        design.recognition?.selectedRoomCandidateIds?.length
+      ) {
         onCommitChange((current) =>
           current.recognition
             ? {
                 ...current,
                 recognition: {
                   ...current.recognition,
-                  selectedWallIds: []
+                  selectedWallIds: [],
+                  selectedOpeningCandidateIds: [],
+                  selectedRoomCandidateIds: []
                 }
               }
             : current
@@ -458,7 +464,7 @@ export default function DesignerCanvas({
           end: point,
           thickness: 14,
           confidence: 1,
-          source: 'inferred',
+          source: 'manual',
           status: 'active'
         };
 
@@ -472,7 +478,26 @@ export default function DesignerCanvas({
             opacity: 0.72,
             locked: false,
             selectedWallIds: [],
+            selectedOpeningCandidateIds: [],
+            selectedRoomCandidateIds: [],
             walls: [],
+            openingCandidates: [],
+            roomCandidates: [],
+            qualityReport: {
+              outerFrameCoverage: 0,
+              disconnectedEndpointCount: 0,
+              lowConfidenceCount: 0,
+              possibleFurnitureNoiseCount: 0,
+              suggestionMessages: ['手动补墙生成的识别层，暂无自动质量报告。']
+            },
+            candidateFilters: {
+              showWalls: true,
+              showOpenings: true,
+              showRooms: true,
+              showLowConfidenceOnly: false,
+              showDeleted: false,
+              showPromoted: true
+            },
             wallCount: 0,
             horizontalCount: 0,
             verticalCount: 0,
@@ -950,14 +975,144 @@ function RecognitionLayerShape({
     return null;
   }
 
+  const filters = recognition.candidateFilters ?? {
+    showWalls: true,
+    showOpenings: true,
+    showRooms: true,
+    showLowConfidenceOnly: false,
+    showDeleted: false,
+    showPromoted: true
+  };
   const selectedIds = new Set(recognition.selectedWallIds);
-  const visibleWalls = recognition.walls.filter((wall) => wall.status !== 'deleted');
+  const selectedOpeningIds = new Set(recognition.selectedOpeningCandidateIds ?? []);
+  const selectedRoomIds = new Set(recognition.selectedRoomCandidateIds ?? []);
+  const canShowStatus = (status: 'active' | 'deleted' | 'promoted') => {
+    if (status === 'deleted') return filters.showDeleted;
+    if (status === 'promoted') return filters.showPromoted;
+    return true;
+  };
+  const passesConfidenceFilter = (confidence?: number) => !filters.showLowConfidenceOnly || (confidence ?? 1) < 0.55;
+  const visibleWalls = filters.showWalls
+    ? recognition.walls.filter((wall) => canShowStatus(wall.status) && passesConfidenceFilter(wall.confidence))
+    : [];
+  const visibleOpenings = filters.showOpenings
+    ? (recognition.openingCandidates ?? []).filter(
+        (candidate) => canShowStatus(candidate.status) && passesConfidenceFilter(candidate.confidence)
+      )
+    : [];
+  const visibleRooms = filters.showRooms
+    ? (recognition.roomCandidates ?? []).filter(
+        (candidate) => canShowStatus(candidate.status) && passesConfidenceFilter(candidate.confidence)
+      )
+    : [];
+
+  const selectCandidate = (
+    type: 'recognitionWall' | 'recognitionOpeningCandidate' | 'recognitionRoomCandidate',
+    id: string,
+    additive: boolean
+  ) => {
+    onSelectionChange({ type, id });
+    onCommitChange((current) => {
+      if (!current.recognition) {
+        return current;
+      }
+
+      const toggle = (items: string[]) => {
+        const selectedSet = new Set(additive ? items : []);
+
+        if (additive && selectedSet.has(id)) {
+          selectedSet.delete(id);
+        } else {
+          selectedSet.add(id);
+        }
+
+        return Array.from(selectedSet);
+      };
+
+      return {
+        ...current,
+        recognition: {
+          ...current.recognition,
+          selectedWallIds:
+            type === 'recognitionWall' ? toggle(current.recognition.selectedWallIds) : additive ? current.recognition.selectedWallIds : [],
+          selectedOpeningCandidateIds:
+            type === 'recognitionOpeningCandidate'
+              ? toggle(current.recognition.selectedOpeningCandidateIds ?? [])
+              : additive
+                ? current.recognition.selectedOpeningCandidateIds ?? []
+                : [],
+          selectedRoomCandidateIds:
+            type === 'recognitionRoomCandidate'
+              ? toggle(current.recognition.selectedRoomCandidateIds ?? [])
+              : additive
+                ? current.recognition.selectedRoomCandidateIds ?? []
+                : []
+        }
+      };
+    }, { type, id });
+  };
 
   return (
     <Group name="recognition-layer" opacity={recognition.opacity}>
+      {visibleRooms.map((candidate) => {
+        const selected = selectedRoomIds.has(candidate.id);
+        const selectable = mode !== 'pan' && !recognition.locked && candidate.status === 'active';
+        const points = candidate.points.flatMap((point) => [point.x, point.y]);
+
+        return (
+          <Group key={candidate.id} listening={selectable}>
+            <Line
+              points={points}
+              closed
+              fill={selected ? 'rgba(242, 162, 58, 0.18)' : 'rgba(90, 132, 255, 0.12)'}
+              stroke={candidate.status === 'promoted' ? '#6f8991' : selected ? '#f2a23a' : '#5a84ff'}
+              strokeWidth={selected ? 3 : 2}
+              dash={candidate.status === 'deleted' ? [4, 7] : [10, 8]}
+              lineJoin="round"
+              onMouseDown={(event) => {
+                if (!selectable) return;
+                event.cancelBubble = true;
+                selectCandidate('recognitionRoomCandidate', candidate.id, event.evt.ctrlKey || event.evt.metaKey);
+              }}
+            />
+            <Rect
+              x={candidate.label.x - 46}
+              y={candidate.label.y - 18}
+              width={92}
+              height={36}
+              fill="#ffffff"
+              opacity={0.84}
+              cornerRadius={6}
+              listening={false}
+            />
+            <Text
+              x={candidate.label.x - 46}
+              y={candidate.label.y - 13}
+              width={92}
+              text={candidate.name ?? '识别房间'}
+              align="center"
+              fontSize={12}
+              fontStyle="bold"
+              fill="#294369"
+              listening={false}
+            />
+            <Text
+              x={candidate.label.x - 46}
+              y={candidate.label.y + 4}
+              width={92}
+              text={`${(candidate.areaSqm ?? 0).toFixed(1)}㎡`}
+              align="center"
+              fontSize={11}
+              fill="#4c607a"
+              listening={false}
+            />
+          </Group>
+        );
+      })}
       {visibleWalls.map((wall) => {
         const selected = selectedIds.has(wall.id);
         const promoted = wall.status === 'promoted';
+        const deleted = wall.status === 'deleted';
         const selectable = mode !== 'pan' && !recognition.locked && wall.status === 'active';
 
         return (
@@ -974,9 +1129,9 @@ function RecognitionLayerShape({
             )}
             <Line
               points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
-              stroke={promoted ? '#6f8991' : '#21a67a'}
+              stroke={deleted ? '#c76060' : promoted ? '#6f8991' : '#21a67a'}
               strokeWidth={Math.max(8, wall.thickness)}
-              dash={promoted ? [6, 7] : [18, 10]}
+              dash={deleted ? [4, 7] : promoted ? [6, 7] : [18, 10]}
               lineCap="round"
               onMouseDown={(event) => {
                 if (!selectable) {
@@ -984,32 +1139,70 @@ function RecognitionLayerShape({
                 }
 
                 event.cancelBubble = true;
-                const additive = event.evt.ctrlKey || event.evt.metaKey;
-                onSelectionChange({ type: 'recognitionWall', id: wall.id });
-                onCommitChange((current) => {
-                  if (!current.recognition) {
-                    return current;
-                  }
-
-                  const currentIds = current.recognition.selectedWallIds;
-                  const selectedSet = new Set(additive ? currentIds : []);
-
-                  if (additive && selectedSet.has(wall.id)) {
-                    selectedSet.delete(wall.id);
-                  } else {
-                    selectedSet.add(wall.id);
-                  }
-
-                  return {
-                    ...current,
-                    recognition: {
-                      ...current.recognition,
-                      selectedWallIds: Array.from(selectedSet)
-                    }
-                  };
-                }, { type: 'recognitionWall', id: wall.id });
+                selectCandidate('recognitionWall', wall.id, event.evt.ctrlKey || event.evt.metaKey);
               }}
             />
+          </Group>
+        );
+      })}
+      {visibleOpenings.map((candidate) => {
+        const selected = selectedOpeningIds.has(candidate.id);
+        const promoted = candidate.status === 'promoted';
+        const deleted = candidate.status === 'deleted';
+        const selectable = mode !== 'pan' && !recognition.locked && candidate.status === 'active';
+        const widthPx = (candidate.width / 100) * design.canvas.scalePxPerMeter;
+
+        return (
+          <Group
+            key={candidate.id}
+            x={candidate.x}
+            y={candidate.y}
+            rotation={candidate.rotation}
+            listening={selectable}
+            onMouseDown={(event) => {
+              if (!selectable) return;
+              event.cancelBubble = true;
+              selectCandidate('recognitionOpeningCandidate', candidate.id, event.evt.ctrlKey || event.evt.metaKey);
+            }}
+          >
+            <Line
+              points={[-widthPx / 2, 0, widthPx / 2, 0]}
+              stroke={deleted ? '#c76060' : promoted ? '#6f8991' : candidate.kind === 'door' ? '#b06b36' : '#2f88c5'}
+              strokeWidth={candidate.kind === 'door' ? 5 : 4}
+              dash={deleted || promoted ? [5, 6] : undefined}
+              lineCap="round"
+            />
+            {candidate.kind === 'door' ? (
+              <Arc
+                x={-widthPx / 2}
+                y={0}
+                innerRadius={Math.max(widthPx, 18)}
+                outerRadius={Math.max(widthPx, 18)}
+                angle={90}
+                stroke={selected ? '#f2a23a' : '#b06b36'}
+                strokeWidth={2}
+                listening={false}
+              />
+            ) : (
+              <Line
+                points={[-widthPx / 2, -7, widthPx / 2, -7]}
+                stroke={selected ? '#f2a23a' : '#2f88c5'}
+                strokeWidth={2}
+                listening={false}
+              />
+            )}
+            {selected && (
+              <Rect
+                x={-widthPx / 2 - 8}
+                y={-18}
+                width={widthPx + 16}
+                height={36}
+                stroke="#f2a23a"
+                dash={[6, 5]}
+                cornerRadius={5}
+                listening={false}
+              />
+            )}
           </Group>
         );
       })}

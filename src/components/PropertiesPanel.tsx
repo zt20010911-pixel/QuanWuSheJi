@@ -47,14 +47,22 @@ type PropertiesPanelProps = {
   onWallDrawModeChange: (mode: WallDrawMode) => void;
   onToggleWallLengths: () => void;
   onExportJson: () => void;
+  onExportSvg: () => void;
   onExportEstimateCsv: () => void;
   onExportHtmlReport: () => void;
+  onExportPrintLayout: () => void;
+  onExportPdfReport: () => void;
+  onExportDxfDraft: () => void;
+  onExportGlbDraft: () => void;
+  onExportObjDraft: () => void;
   onStartCalibration: () => void;
   onRecognizeFloorplan: () => void;
   recognitionMode: RecognitionMode;
   onRecognitionModeChange: (mode: RecognitionMode) => void;
   onKeepBackgroundReference: () => void;
   onSelectAllRecognitionWalls: () => void;
+  onSelectAllRecognitionOpenings: () => void;
+  onSelectAllRecognitionRooms: () => void;
   onClearRecognitionSelection: () => void;
   onDeleteSelectedRecognitionWalls: () => void;
   onRestoreDeletedRecognitionWalls: () => void;
@@ -62,6 +70,11 @@ type PropertiesPanelProps = {
   onMergeAllRecognitionWalls: () => void;
   onPromoteSelectedRecognitionWalls: () => void;
   onPromoteAllRecognitionWalls: () => void;
+  onPromoteSelectedRecognitionOpenings: () => void;
+  onPromoteAllRecognitionOpenings: () => void;
+  onPromoteSelectedRecognitionRooms: () => void;
+  onPromoteAllRecognitionRooms: () => void;
+  onSaveAiRecognitionDraft: () => void;
   onDiscardRecognitionLayer: () => void;
   recognizingFloorplan: boolean;
   importWizardOpen: boolean;
@@ -83,7 +96,12 @@ const getPreferredTab = (
   recognitionLayer: RecognitionSession | null,
   importWizardOpen: boolean
 ): PropertiesPanelTab => {
-  if (importWizardOpen || selection?.type === 'recognitionWall') {
+  if (
+    importWizardOpen ||
+    selection?.type === 'recognitionWall' ||
+    selection?.type === 'recognitionOpeningCandidate' ||
+    selection?.type === 'recognitionRoomCandidate'
+  ) {
     return 'recognition';
   }
 
@@ -108,14 +126,22 @@ export default function PropertiesPanel({
   onWallDrawModeChange,
   onToggleWallLengths,
   onExportJson,
+  onExportSvg,
   onExportEstimateCsv,
   onExportHtmlReport,
+  onExportPrintLayout,
+  onExportPdfReport,
+  onExportDxfDraft,
+  onExportGlbDraft,
+  onExportObjDraft,
   onStartCalibration,
   onRecognizeFloorplan,
   recognitionMode,
   onRecognitionModeChange,
   onKeepBackgroundReference,
   onSelectAllRecognitionWalls,
+  onSelectAllRecognitionOpenings,
+  onSelectAllRecognitionRooms,
   onClearRecognitionSelection,
   onDeleteSelectedRecognitionWalls,
   onRestoreDeletedRecognitionWalls,
@@ -123,6 +149,11 @@ export default function PropertiesPanel({
   onMergeAllRecognitionWalls,
   onPromoteSelectedRecognitionWalls,
   onPromoteAllRecognitionWalls,
+  onPromoteSelectedRecognitionOpenings,
+  onPromoteAllRecognitionOpenings,
+  onPromoteSelectedRecognitionRooms,
+  onPromoteAllRecognitionRooms,
+  onSaveAiRecognitionDraft,
   onDiscardRecognitionLayer,
   recognizingFloorplan,
   importWizardOpen,
@@ -211,6 +242,8 @@ export default function PropertiesPanel({
                 recognizingFloorplan={recognizingFloorplan}
                 onChange={onChange}
                 onSelectAll={onSelectAllRecognitionWalls}
+                onSelectAllOpenings={onSelectAllRecognitionOpenings}
+                onSelectAllRooms={onSelectAllRecognitionRooms}
                 onClearSelection={onClearRecognitionSelection}
                 onDeleteSelected={onDeleteSelectedRecognitionWalls}
                 onRestoreDeleted={onRestoreDeletedRecognitionWalls}
@@ -218,6 +251,11 @@ export default function PropertiesPanel({
                 onMergeAll={onMergeAllRecognitionWalls}
                 onPromoteSelected={onPromoteSelectedRecognitionWalls}
                 onPromoteAll={onPromoteAllRecognitionWalls}
+                onPromoteSelectedOpenings={onPromoteSelectedRecognitionOpenings}
+                onPromoteAllOpenings={onPromoteAllRecognitionOpenings}
+                onPromoteSelectedRooms={onPromoteSelectedRecognitionRooms}
+                onPromoteAllRooms={onPromoteAllRecognitionRooms}
+                onSaveAiDraft={onSaveAiRecognitionDraft}
                 onDiscard={onDiscardRecognitionLayer}
                 onRecognizeAgain={onRecognizeFloorplan}
               />
@@ -265,9 +303,16 @@ export default function PropertiesPanel({
             <DeliverySummaryCard
               design={design}
               onExportJson={onExportJson}
+              onExportSvg={onExportSvg}
               onExportEstimateCsv={onExportEstimateCsv}
               onExportHtmlReport={onExportHtmlReport}
+              onExportPrintLayout={onExportPrintLayout}
+              onExportPdfReport={onExportPdfReport}
+              onExportDxfDraft={onExportDxfDraft}
+              onExportGlbDraft={onExportGlbDraft}
+              onExportObjDraft={onExportObjDraft}
             />
+            <PrintExportSettingsPanel design={design} onChange={onChange} />
             <EstimatePanel
               design={design}
               onChange={onChange}
@@ -291,6 +336,8 @@ function CurrentPlanSummary({ design }: { design: DesignDocument }) {
       <span>{design.openings.length} 个门窗</span>
       <span>{design.furniture.length} 件家具</span>
       <span>{design.recognition?.walls.filter((wall) => wall.status === 'active').length ?? 0} 面识别候选墙</span>
+      <span>{design.recognition?.openingCandidates?.filter((candidate) => candidate.status === 'active').length ?? 0} 个门窗候选</span>
+      <span>{design.recognition?.roomCandidates?.filter((candidate) => candidate.status === 'active').length ?? 0} 个房间候选</span>
     </div>
   );
 }
@@ -373,6 +420,8 @@ function RecognitionLayerEditor({
   recognizingFloorplan,
   onChange,
   onSelectAll,
+  onSelectAllOpenings,
+  onSelectAllRooms,
   onClearSelection,
   onDeleteSelected,
   onRestoreDeleted,
@@ -380,6 +429,11 @@ function RecognitionLayerEditor({
   onMergeAll,
   onPromoteSelected,
   onPromoteAll,
+  onPromoteSelectedOpenings,
+  onPromoteAllOpenings,
+  onPromoteSelectedRooms,
+  onPromoteAllRooms,
+  onSaveAiDraft,
   onDiscard,
   onRecognizeAgain
 }: {
@@ -387,6 +441,8 @@ function RecognitionLayerEditor({
   recognizingFloorplan: boolean;
   onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
   onSelectAll: () => void;
+  onSelectAllOpenings: () => void;
+  onSelectAllRooms: () => void;
   onClearSelection: () => void;
   onDeleteSelected: () => void;
   onRestoreDeleted: () => void;
@@ -394,15 +450,55 @@ function RecognitionLayerEditor({
   onMergeAll: () => void;
   onPromoteSelected: () => void;
   onPromoteAll: () => void;
+  onPromoteSelectedOpenings: () => void;
+  onPromoteAllOpenings: () => void;
+  onPromoteSelectedRooms: () => void;
+  onPromoteAllRooms: () => void;
+  onSaveAiDraft: () => void;
   onDiscard: () => void;
   onRecognizeAgain: () => void;
 }) {
   const activeCount = recognitionLayer.walls.filter((wall) => wall.status === 'active').length;
-  const deletedCount = recognitionLayer.walls.filter((wall) => wall.status === 'deleted').length;
-  const promotedCount = recognitionLayer.walls.filter((wall) => wall.status === 'promoted').length;
-  const selectedCount = recognitionLayer.selectedWallIds.length;
+  const activeOpeningCount = (recognitionLayer.openingCandidates ?? []).filter((candidate) => candidate.status === 'active').length;
+  const activeRoomCount = (recognitionLayer.roomCandidates ?? []).filter((candidate) => candidate.status === 'active').length;
+  const deletedCount =
+    recognitionLayer.walls.filter((wall) => wall.status === 'deleted').length +
+    (recognitionLayer.openingCandidates ?? []).filter((candidate) => candidate.status === 'deleted').length +
+    (recognitionLayer.roomCandidates ?? []).filter((candidate) => candidate.status === 'deleted').length;
+  const promotedCount =
+    recognitionLayer.walls.filter((wall) => wall.status === 'promoted').length +
+    (recognitionLayer.openingCandidates ?? []).filter((candidate) => candidate.status === 'promoted').length +
+    (recognitionLayer.roomCandidates ?? []).filter((candidate) => candidate.status === 'promoted').length;
+  const selectedWallCount = recognitionLayer.selectedWallIds.length;
+  const selectedOpeningCount = recognitionLayer.selectedOpeningCandidateIds?.length ?? 0;
+  const selectedRoomCount = recognitionLayer.selectedRoomCandidateIds?.length ?? 0;
+  const selectedCount = selectedWallCount + selectedOpeningCount + selectedRoomCount;
   const inferredCount = recognitionLayer.walls.filter((wall) => wall.source === 'inferred').length;
   const modeLabel = recognitionLayer.parameters.mode === 'complete' ? '完整模式' : '精准模式';
+  const filters = recognitionLayer.candidateFilters ?? {
+    showWalls: true,
+    showOpenings: true,
+    showRooms: true,
+    showLowConfidenceOnly: false,
+    showDeleted: false,
+    showPromoted: true
+  };
+  const qualityReport = recognitionLayer.qualityReport;
+
+  const updateFilter = (key: keyof typeof filters, value: boolean) => {
+    onChange((current) => ({
+      ...current,
+      recognition: current.recognition
+        ? {
+            ...current.recognition,
+            candidateFilters: {
+              ...filters,
+              [key]: value
+            }
+          }
+        : current.recognition
+    }));
+  };
 
   return (
     <div className="property-stack recognition-stack">
@@ -412,10 +508,23 @@ function RecognitionLayerEditor({
       </h2>
       <div className="recognition-summary">
         <span>{modeLabel} · 原始 {recognitionLayer.parameters.rawWallCount} 条 / 候选 {recognitionLayer.parameters.candidateWallCount} 条</span>
-        <span>候选 {activeCount} 面 / 已选 {selectedCount} 面</span>
-        <span>已写入 {promotedCount} 面 / 已删除 {deletedCount} 面</span>
+        <span>墙 {activeCount} 面 / 门窗 {activeOpeningCount} 个 / 房间 {activeRoomCount} 个</span>
+        <span>已选 {selectedCount} 个 / 已写入 {promotedCount} 个 / 已删除 {deletedCount} 个</span>
         <span>补全 {recognitionLayer.parameters.inferredWallCount || inferredCount} 面 / 置信度：{recognitionLayer.confidence}</span>
       </div>
+      {qualityReport && (
+        <div className="recognition-quality">
+          <strong>识别质量</strong>
+          <span>外框覆盖：{Math.round(qualityReport.outerFrameCoverage * 100)}%</span>
+          <span>断点：{qualityReport.disconnectedEndpointCount} 个 · 低置信：{qualityReport.lowConfidenceCount} 个</span>
+          <span>疑似家具线：{qualityReport.possibleFurnitureNoiseCount} 条</span>
+          <div className="quality-suggestions">
+            {qualityReport.suggestionMessages.map((message) => (
+              <span key={message}>{message}</span>
+            ))}
+          </div>
+        </div>
+      )}
       <label className="checkbox-row">
         <input
           type="checkbox"
@@ -430,6 +539,25 @@ function RecognitionLayerEditor({
         />
         <span>显示识别层</span>
       </label>
+      <div className="candidate-filter-grid">
+        {[
+          { key: 'showWalls', label: '墙体' },
+          { key: 'showOpenings', label: '门窗' },
+          { key: 'showRooms', label: '房间' },
+          { key: 'showLowConfidenceOnly', label: '低置信' },
+          { key: 'showDeleted', label: '已删除' },
+          { key: 'showPromoted', label: '已写入' }
+        ].map((item) => (
+          <label className="checkbox-row compact" key={item.key}>
+            <input
+              type="checkbox"
+              checked={Boolean(filters[item.key as keyof typeof filters])}
+              onChange={(event) => updateFilter(item.key as keyof typeof filters, event.target.checked)}
+            />
+            <span>{item.label}</span>
+          </label>
+        ))}
+      </div>
       <label className="checkbox-row">
         <input
           type="checkbox"
@@ -463,7 +591,15 @@ function RecognitionLayerEditor({
       </label>
       <div className="property-button-row">
         <button className="secondary-button" type="button" onClick={onSelectAll} disabled={activeCount === 0}>
-          全选
+          全选墙体
+        </button>
+        <button className="secondary-button" type="button" onClick={onSelectAllOpenings} disabled={activeOpeningCount === 0}>
+          全选门窗
+        </button>
+      </div>
+      <div className="property-button-row">
+        <button className="secondary-button" type="button" onClick={onSelectAllRooms} disabled={activeRoomCount === 0}>
+          全选房间
         </button>
         <button className="secondary-button" type="button" onClick={onClearSelection} disabled={selectedCount === 0}>
           清空选择
@@ -478,21 +614,41 @@ function RecognitionLayerEditor({
         </button>
       </div>
       <div className="property-button-row">
-        <button className="secondary-button" type="button" onClick={onMergeSelected} disabled={selectedCount < 2}>
-          合并选中
+        <button className="secondary-button" type="button" onClick={onMergeSelected} disabled={selectedWallCount < 2}>
+          合并选中墙
         </button>
         <button className="secondary-button" type="button" onClick={onMergeAll} disabled={activeCount < 2}>
-          合并全部
+          合并全部墙
         </button>
       </div>
       <div className="property-button-row">
-        <button className="primary-button" type="button" onClick={onPromoteSelected} disabled={selectedCount === 0}>
-          写入选中
+        <button className="primary-button" type="button" onClick={onPromoteSelected} disabled={selectedWallCount === 0}>
+          写入选中墙
         </button>
         <button className="primary-button" type="button" onClick={onPromoteAll} disabled={activeCount === 0}>
-          写入全部
+          写入全部墙
         </button>
       </div>
+      <div className="property-button-row">
+        <button className="primary-button" type="button" onClick={onPromoteSelectedOpenings} disabled={selectedOpeningCount === 0}>
+          写入选中门窗
+        </button>
+        <button className="primary-button" type="button" onClick={onPromoteAllOpenings} disabled={activeOpeningCount === 0}>
+          写入全部门窗
+        </button>
+      </div>
+      <div className="property-button-row">
+        <button className="primary-button" type="button" onClick={onPromoteSelectedRooms} disabled={selectedRoomCount === 0}>
+          写入选中房间
+        </button>
+        <button className="primary-button" type="button" onClick={onPromoteAllRooms} disabled={activeRoomCount === 0}>
+          写入全部房间
+        </button>
+      </div>
+      <button className="secondary-button" type="button" onClick={onSaveAiDraft}>
+        <Wand2 size={16} />
+        保存 AI 识别草稿
+      </button>
       <button className="secondary-button" type="button" onClick={onRecognizeAgain} disabled={recognizingFloorplan}>
         <Wand2 size={16} />
         {recognizingFloorplan ? '正在识别' : '重新识别'}
@@ -703,13 +859,25 @@ function MaterialBrushEditor({
 function DeliverySummaryCard({
   design,
   onExportJson,
+  onExportSvg,
   onExportEstimateCsv,
-  onExportHtmlReport
+  onExportHtmlReport,
+  onExportPrintLayout,
+  onExportPdfReport,
+  onExportDxfDraft,
+  onExportGlbDraft,
+  onExportObjDraft
 }: {
   design: DesignDocument;
   onExportJson: () => void;
+  onExportSvg: () => void;
   onExportEstimateCsv: () => void;
   onExportHtmlReport: () => void;
+  onExportPrintLayout: () => void;
+  onExportPdfReport: () => void;
+  onExportDxfDraft: () => void;
+  onExportGlbDraft: () => void;
+  onExportObjDraft: () => void;
 }) {
   const roomAreaTotal = getRoomAreaTotal(design.rooms);
   const roomZoneAreaTotal = (design.roomZones ?? []).reduce(
@@ -721,6 +889,10 @@ function DeliverySummaryCard({
   const doorCount = design.openings.filter((opening) => opening.kind === 'door').length;
   const windowCount = design.openings.filter((opening) => opening.kind === 'window').length;
   const activeRecognitionCount = design.recognition?.walls.filter((wall) => wall.status === 'active').length ?? 0;
+  const activeRecognitionOpeningCount =
+    design.recognition?.openingCandidates?.filter((candidate) => candidate.status === 'active').length ?? 0;
+  const activeRecognitionRoomCount =
+    design.recognition?.roomCandidates?.filter((candidate) => candidate.status === 'active').length ?? 0;
 
   return (
     <div className="property-stack delivery-stack">
@@ -745,8 +917,15 @@ function DeliverySummaryCard({
         <strong>{formatCurrency(estimateTotal)}</strong>
         <span>识别候选墙</span>
         <strong>{activeRecognitionCount} 面</strong>
+        <span>识别门窗候选</span>
+        <strong>{activeRecognitionOpeningCount} 个</strong>
+        <span>识别房间候选</span>
+        <strong>{activeRecognitionRoomCount} 个</strong>
       </div>
       <div className="inline-actions">
+        <button className="secondary-button" type="button" onClick={onExportSvg}>
+          SVG 平面图
+        </button>
         <button className="secondary-button" type="button" onClick={onExportJson}>
           导出 JSON
         </button>
@@ -759,6 +938,193 @@ function DeliverySummaryCard({
           HTML 报告
         </button>
       </div>
+      <div className="inline-actions">
+        <button className="secondary-button" type="button" onClick={onExportPrintLayout}>
+          打印布局
+        </button>
+        <button className="secondary-button" type="button" onClick={onExportPdfReport}>
+          PDF 打印页
+        </button>
+      </div>
+      <div className="inline-actions">
+        <button className="secondary-button" type="button" onClick={onExportDxfDraft}>
+          DXF 草案
+        </button>
+        <button className="secondary-button" type="button" onClick={onExportGlbDraft}>
+          GLB 草案
+        </button>
+        <button className="secondary-button" type="button" onClick={onExportObjDraft}>
+          OBJ 草案
+        </button>
+      </div>
+      <ExportHistoryList design={design} />
+    </div>
+  );
+}
+
+function ExportHistoryList({ design }: { design: DesignDocument }) {
+  const history = (design.exportHistory ?? []).slice(-5).reverse();
+
+  return (
+    <div className="export-history">
+      <strong>最近导出</strong>
+      {history.length === 0 ? (
+        <span>暂无导出记录</span>
+      ) : (
+        history.map((item) => (
+          <span key={item.id}>
+            {item.fileName} · {new Date(item.createdAt).toLocaleString('zh-CN')}
+          </span>
+        ))
+      )}
+    </div>
+  );
+}
+
+function PrintExportSettingsPanel({
+  design,
+  onChange
+}: {
+  design: DesignDocument;
+  onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+}) {
+  const printSettings = design.printSettings ?? {
+    paperSize: 'A4' as const,
+    orientation: 'landscape' as const,
+    scaleMode: 'fit' as const,
+    showBackground: false,
+    showGrid: true,
+    showWallLengths: true,
+    showRoomAreas: true,
+    showLegend: true,
+    showBudgetSummary: true
+  };
+  const draftSettings = design.exportDraftSettings ?? {
+    includeBackgroundInSvg: false,
+    includeRecognitionLayer: false,
+    dxfUnit: 'millimeter' as const,
+    modelUnit: 'meter' as const,
+    draftNotice: '草案格式仅用于后续专业格式接入，不等同于正式 CAD/BIM 文件。'
+  };
+
+  return (
+    <div className="property-stack print-export-stack">
+      <h2>
+        <FileText size={16} />
+        打印与格式
+      </h2>
+      <div className="property-button-row">
+        <label>
+          <span>纸张</span>
+          <select
+            value={printSettings.paperSize}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                printSettings: { ...(current.printSettings ?? printSettings), paperSize: event.target.value as 'A4' | 'A3' }
+              }))
+            }
+          >
+            <option value="A4">A4</option>
+            <option value="A3">A3</option>
+          </select>
+        </label>
+        <label>
+          <span>方向</span>
+          <select
+            value={printSettings.orientation}
+            onChange={(event) =>
+              onChange((current) => ({
+                ...current,
+                printSettings: {
+                  ...(current.printSettings ?? printSettings),
+                  orientation: event.target.value as 'portrait' | 'landscape'
+                }
+              }))
+            }
+          >
+            <option value="landscape">横向</option>
+            <option value="portrait">纵向</option>
+          </select>
+        </label>
+      </div>
+      <div className="candidate-filter-grid">
+        {[
+          ['showGrid', '显示网格'],
+          ['showWallLengths', '显示墙长'],
+          ['showRoomAreas', '显示面积'],
+          ['showLegend', '显示图例'],
+          ['showBudgetSummary', '预算摘要']
+        ].map(([key, label]) => (
+          <label className="checkbox-row compact" key={key}>
+            <input
+              type="checkbox"
+              checked={Boolean(printSettings[key as keyof typeof printSettings])}
+              onChange={(event) =>
+                onChange((current) => ({
+                  ...current,
+                  printSettings: {
+                    ...(current.printSettings ?? printSettings),
+                    [key]: event.target.checked
+                  }
+                }))
+              }
+            />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={draftSettings.includeBackgroundInSvg}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              exportDraftSettings: {
+                ...(current.exportDraftSettings ?? draftSettings),
+                includeBackgroundInSvg: event.target.checked
+              }
+            }))
+          }
+        />
+        <span>SVG 包含底图</span>
+      </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={draftSettings.includeRecognitionLayer}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              exportDraftSettings: {
+                ...(current.exportDraftSettings ?? draftSettings),
+                includeRecognitionLayer: event.target.checked
+              }
+            }))
+          }
+        />
+        <span>SVG 包含识别层</span>
+      </label>
+      <label>
+        <span>DXF 单位</span>
+        <select
+          value={draftSettings.dxfUnit}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              exportDraftSettings: {
+                ...(current.exportDraftSettings ?? draftSettings),
+                dxfUnit: event.target.value as 'meter' | 'millimeter'
+              }
+            }))
+          }
+        >
+          <option value="millimeter">毫米</option>
+          <option value="meter">米</option>
+        </select>
+      </label>
+      <div className="editing-hint">{draftSettings.draftNotice}</div>
     </div>
   );
 }

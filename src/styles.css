@@ -139,6 +139,50 @@ button:disabled {
   color: #2d3645;
 }
 
+.export-menu {
+  position: relative;
+}
+
+.export-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.export-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.export-menu-list {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 4px;
+  min-width: 178px;
+  border: 1px solid #cfd9d4;
+  border-radius: 6px;
+  padding: 6px;
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(31, 41, 51, 0.14);
+}
+
+.export-menu-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 5px;
+  padding: 8px 9px;
+  background: transparent;
+  color: #2d3645;
+  text-align: left;
+}
+
+.export-menu-list button:hover {
+  background: #eef6f3;
+}
+
 .zoom-control {
   padding-left: 6px;
   border-left: 1px solid #d8dedb;
@@ -725,6 +769,48 @@ button:disabled {
   font-size: 12px;
 }
 
+.recognition-quality {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #d9e7e1;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fbf7ed;
+  color: #5b4b2b;
+  font-size: 12px;
+}
+
+.recognition-quality strong {
+  color: #2f3a4b;
+  font-size: 13px;
+}
+
+.quality-suggestions {
+  display: grid;
+  gap: 4px;
+  color: #7a5d20;
+  line-height: 1.45;
+}
+
+.candidate-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  border-radius: 6px;
+  padding: 8px;
+  background: #f6faf8;
+}
+
+.checkbox-row.compact {
+  gap: 6px !important;
+  font-size: 12px;
+}
+
+.checkbox-row.compact input {
+  width: 14px;
+  height: 14px;
+}
+
 .property-button-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -900,9 +986,24 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.export-history {
+  display: grid;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: #f2f6f4;
+  color: #536071;
+  font-size: 12px;
+}
+
+.export-history strong {
+  color: #263041;
+}
+
 .feature-center-stack,
 .estimate-stack,
-.room-zone-stack {
+.room-zone-stack,
+.print-export-stack {
   margin-bottom: 16px;
   border: 1px solid #d9e4df;
   border-radius: 6px;

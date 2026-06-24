@@ -9,6 +9,7 @@ import ThreeDViewer, { type ThreeDViewerHandle } from './components/ThreeDViewer
 import TopBar from './components/TopBar';
 import { DESIGN_TEMPLATES, cloneTemplateDesign, createEmptyDesign } from './data/templates';
 import { DEFAULT_MATERIAL_BRUSH, resolveFurnitureMaterial } from './data/furnitureMaterials';
+import { DEFAULT_ROOM_ZONE_MATERIAL_IDS } from './data/materials';
 import type {
   BackgroundImage,
   DesignDocument,
@@ -18,7 +19,9 @@ import type {
   FurnitureInstance,
   MaterialBrushState,
   Point,
+  RecognitionOpeningCandidate,
   RecognitionMode,
+  RecognitionRoomCandidate,
   RecognitionSession,
   RecognitionWall,
   Selection,
@@ -28,9 +31,15 @@ import type {
   WallDrawMode
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
+import { createDeliveryHtml, createDxfDraft, createModelDraft, createPlanSvg } from './utils/designExport';
 import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId } from './utils/geometry';
-import { normalizeDesign, normalizeFurnitureInstance, normalizeRecognitionWall } from './utils/designMigration';
+import {
+  DEFAULT_RECOGNITION_CANDIDATE_FILTERS,
+  normalizeDesign,
+  normalizeFurnitureInstance,
+  normalizeRecognitionWall
+} from './utils/designMigration';
 import { createEstimateItems, formatCurrency, getEstimateTotal, getRoomZoneAreaSqm } from './utils/roomMetrics';
 
 const HISTORY_LIMIT = 80;
@@ -155,6 +164,14 @@ const createRecognitionSession = (
     source: wall.source,
     status: 'active'
   }));
+  const openingCandidates: RecognitionOpeningCandidate[] = result.openingCandidates.map((candidate) => ({
+    ...candidate,
+    status: 'active'
+  }));
+  const roomCandidates: RecognitionRoomCandidate[] = result.roomCandidates.map((candidate) => ({
+    ...candidate,
+    status: 'active'
+  }));
   const wallCount = walls.length;
   const confidence = wallCount >= 12 ? '高' : wallCount >= 6 ? '中' : '低';
 
@@ -167,7 +184,13 @@ const createRecognitionSession = (
     opacity: 0.72,
     locked: false,
     selectedWallIds: [],
+    selectedOpeningCandidateIds: [],
+    selectedRoomCandidateIds: [],
     walls,
+    openingCandidates,
+    roomCandidates,
+    qualityReport: result.qualityReport,
+    candidateFilters: { ...DEFAULT_RECOGNITION_CANDIDATE_FILTERS },
     wallCount,
     horizontalCount: result.horizontalCount,
     verticalCount: result.verticalCount,
@@ -186,9 +209,17 @@ const createRecognitionSession = (
 const withRecognitionCounts = (recognition: RecognitionSession): RecognitionSession => {
   const visibleWalls = recognition.walls.filter((wall) => wall.status !== 'deleted');
   const selectableIds = new Set(visibleWalls.filter((wall) => wall.status === 'active').map((wall) => wall.id));
+  const selectableOpeningIds = new Set(
+    (recognition.openingCandidates ?? []).filter((candidate) => candidate.status === 'active').map((candidate) => candidate.id)
+  );
+  const selectableRoomIds = new Set(
+    (recognition.roomCandidates ?? []).filter((candidate) => candidate.status === 'active').map((candidate) => candidate.id)
+  );
 
   return {
     ...recognition,
+    selectedOpeningCandidateIds: (recognition.selectedOpeningCandidateIds ?? []).filter((id) => selectableOpeningIds.has(id)),
+    selectedRoomCandidateIds: (recognition.selectedRoomCandidateIds ?? []).filter((id) => selectableRoomIds.has(id)),
     wallCount: visibleWalls.length,
     selectedWallIds: recognition.selectedWallIds.filter((id) => selectableIds.has(id))
   };
@@ -280,6 +311,10 @@ export default function App() {
 
   const recognitionLayer = design.recognition ?? null;
   const selectedRecognitionIds = recognitionLayer?.selectedWallIds ?? [];
+  const selectedRecognitionOpeningIds = recognitionLayer?.selectedOpeningCandidateIds ?? [];
+  const selectedRecognitionRoomIds = recognitionLayer?.selectedRoomCandidateIds ?? [];
+  const selectedRecognitionCandidateCount =
+    selectedRecognitionIds.length + selectedRecognitionOpeningIds.length + selectedRecognitionRoomIds.length;
 
   const selectedFurniture =
     selection?.type === 'furniture' ? design.furniture.find((item) => item.instanceId === selection.id) ?? null : null;
@@ -416,8 +451,10 @@ export default function App() {
   const deleteSelection = useCallback(() => {
     resetWallDraft();
 
-    if (selectedRecognitionIds.length > 0) {
+    if (selectedRecognitionCandidateCount > 0) {
       const selectedIds = new Set(selectedRecognitionIds);
+      const selectedOpeningIds = new Set(selectedRecognitionOpeningIds);
+      const selectedRoomIds = new Set(selectedRecognitionRoomIds);
 
       commitChange((current) => {
         if (!current.recognition) {
@@ -429,15 +466,27 @@ export default function App() {
           recognition: withRecognitionCounts({
             ...current.recognition,
             selectedWallIds: [],
+            selectedOpeningCandidateIds: [],
+            selectedRoomCandidateIds: [],
             walls: current.recognition.walls.map((wall) =>
               selectedIds.has(wall.id) && wall.status === 'active'
                 ? { ...wall, status: 'deleted', updatedAt: new Date().toISOString() }
                 : wall
+            ),
+            openingCandidates: (current.recognition.openingCandidates ?? []).map((candidate) =>
+              selectedOpeningIds.has(candidate.id) && candidate.status === 'active'
+                ? { ...candidate, status: 'deleted', updatedAt: new Date().toISOString() }
+                : candidate
+            ),
+            roomCandidates: (current.recognition.roomCandidates ?? []).map((candidate) =>
+              selectedRoomIds.has(candidate.id) && candidate.status === 'active'
+                ? { ...candidate, status: 'deleted', updatedAt: new Date().toISOString() }
+                : candidate
             )
           })
         };
       });
-      setStatusText(`已删除 ${selectedIds.size} 面识别墙`);
+      setStatusText(`已删除 ${selectedRecognitionCandidateCount} 个识别候选`);
       return;
     }
 
@@ -491,7 +540,15 @@ export default function App() {
 
       return current;
     }, null);
-  }, [commitChange, resetWallDraft, selectedRecognitionIds, selection]);
+  }, [
+    commitChange,
+    resetWallDraft,
+    selectedRecognitionCandidateCount,
+    selectedRecognitionIds,
+    selectedRecognitionOpeningIds,
+    selectedRecognitionRoomIds,
+    selection
+  ]);
 
   const copySelectedFurniture = useCallback(() => {
     if (selectedFurnitureGroup.length > 0) {
@@ -784,8 +841,8 @@ export default function App() {
   const createExportSnapshot = (
     kind: NonNullable<DesignDocument['exportHistory']>[number]['kind'],
     fileName: string
-  ) =>
-    stampDesign({
+  ) => {
+    const snapshot = stampDesign({
       ...design,
       exportHistory: [
         ...(design.exportHistory ?? []),
@@ -797,6 +854,10 @@ export default function App() {
         }
       ]
     });
+
+    setDesign(snapshot);
+    return snapshot;
+  };
 
   const getPlanDataUrl = () => {
     const stage = stageRef.current;
@@ -826,6 +887,7 @@ export default function App() {
     }
 
     const fileName = `${design.name || '全屋设计'}.png`;
+    createExportSnapshot('png', fileName);
     const link = document.createElement('a');
 
     link.download = fileName;
@@ -865,73 +927,78 @@ export default function App() {
     setStatusText('已导出预算 CSV');
   };
 
+  const getSvgExportOptions = (snapshot: DesignDocument, includeBackground?: boolean) => ({
+    showGrid: snapshot.printSettings?.showGrid ?? true,
+    showWallLengths: snapshot.printSettings?.showWallLengths ?? true,
+    showRoomAreas: snapshot.printSettings?.showRoomAreas ?? true,
+    includeBackground: includeBackground ?? snapshot.exportDraftSettings?.includeBackgroundInSvg ?? false,
+    includeRecognitionLayer: snapshot.exportDraftSettings?.includeRecognitionLayer ?? false
+  });
+
+  const exportSvgPlan = () => {
+    const fileName = `${design.name || '全屋设计'}-平面图.svg`;
+    const snapshot = createExportSnapshot('svg-plan', fileName);
+    const svg = createPlanSvg(snapshot, getSvgExportOptions(snapshot));
+
+    downloadBlob(svg, 'image/svg+xml;charset=utf-8', fileName);
+    setStatusText('已导出 SVG 平面图');
+  };
+
   const exportHtmlReport = () => {
     const fileName = `${design.name || '全屋设计'}-交付报告.html`;
     const snapshot = createExportSnapshot('html-report', fileName);
-    const items = createEstimateItems(snapshot);
-    const total = getEstimateTotal(items);
     const planImage = getPlanDataUrl();
-    const roomZoneRows = (snapshot.roomZones ?? [])
-      .map((zone) => {
-        const autoArea = getRoomZoneAreaSqm(zone, snapshot.canvas.scalePxPerMeter);
-        const displayArea = zone.manualAreaSqm ?? autoArea;
-        return `<tr><td>${escapeHtml(zone.name)}</td><td>${displayArea.toFixed(2)}㎡</td><td>${zone.manualAreaSqm ? '手动面积' : '自动面积'}</td></tr>`;
-      })
-      .join('');
-    const estimateRows = items
-      .map(
-        (item) =>
-          `<tr><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.roomName)}</td><td>${escapeHtml(item.name)}</td><td>${item.quantity.toFixed(2)}${escapeHtml(item.unit)}</td><td>${formatCurrency(item.total)}</td></tr>`
-      )
-      .join('');
-    const html = `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(snapshot.name)} 交付报告</title>
-  <style>
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f5f7f4; }
-    main { max-width: 1040px; margin: 0 auto; padding: 32px; }
-    h1 { margin: 0 0 8px; font-size: 30px; }
-    h2 { margin: 28px 0 12px; font-size: 18px; }
-    .meta { color: #5d6874; margin-bottom: 24px; }
-    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-    .card { background: #fff; border: 1px solid #dfe6e1; border-radius: 8px; padding: 14px; }
-    .card strong { display: block; font-size: 22px; margin-top: 6px; }
-    img { max-width: 100%; border: 1px solid #dfe6e1; border-radius: 8px; background: #fff; }
-    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dfe6e1; }
-    th, td { padding: 10px 12px; border-bottom: 1px solid #edf1ee; text-align: left; font-size: 14px; }
-    th { background: #eef4f0; }
-    .total { text-align: right; font-size: 20px; font-weight: 700; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${escapeHtml(snapshot.name)}</h1>
-    <div class="meta">生成时间：${escapeHtml(new Date(snapshot.updatedAt).toLocaleString('zh-CN'))}</div>
-    <section class="summary">
-      <div class="card">墙体<strong>${snapshot.walls.length}</strong></div>
-      <div class="card">门窗<strong>${snapshot.openings.length}</strong></div>
-      <div class="card">家具<strong>${snapshot.furniture.length}</strong></div>
-      <div class="card">总面积<strong>${snapshot.homeAreaSqm ? snapshot.homeAreaSqm.toFixed(1) + '㎡' : '未填写'}</strong></div>
-    </section>
-    <h2>平面图</h2>
-    ${planImage ? `<img src="${planImage}" alt="平面图" />` : '<p>当前不在平面编辑视图，未生成平面图预览。</p>'}
-    <h2>房间区域</h2>
-    <table><thead><tr><th>房间</th><th>面积</th><th>来源</th></tr></thead><tbody>${roomZoneRows || '<tr><td colspan="3">尚未绘制房间区域</td></tr>'}</tbody></table>
-    <h2>预算清单</h2>
-    <table><thead><tr><th>类别</th><th>房间</th><th>项目</th><th>数量</th><th>小计</th></tr></thead><tbody>${estimateRows || '<tr><td colspan="5">暂无预算项目</td></tr>'}</tbody></table>
-    <p class="total">预算合计：${formatCurrency(total)}</p>
-  </main>
-</body>
-</html>`;
+    const svg = createPlanSvg(snapshot, getSvgExportOptions(snapshot, snapshot.printSettings?.showBackground));
+    const html = createDeliveryHtml(snapshot, planImage, svg, 'report', snapshot.printSettings!);
 
     downloadBlob(html, 'text/html;charset=utf-8', fileName);
     setStatusText('已导出 HTML 交付报告');
   };
 
+  const exportPrintLayout = () => {
+    const fileName = `${design.name || '全屋设计'}-打印布局.html`;
+    const snapshot = createExportSnapshot('print-layout', fileName);
+    const planImage = getPlanDataUrl();
+    const svg = createPlanSvg(snapshot, getSvgExportOptions(snapshot, snapshot.printSettings?.showBackground));
+    const html = createDeliveryHtml(snapshot, planImage, svg, 'print', snapshot.printSettings!);
+
+    downloadBlob(html, 'text/html;charset=utf-8', fileName);
+    setStatusText('已导出打印布局 HTML，可用 Chrome 打印为 PDF');
+  };
+
+  const exportPdfReport = () => {
+    const fileName = `${design.name || '全屋设计'}-PDF打印报告.html`;
+    const snapshot = createExportSnapshot('pdf-report', fileName);
+    const planImage = getPlanDataUrl();
+    const svg = createPlanSvg(snapshot, getSvgExportOptions(snapshot, snapshot.printSettings?.showBackground));
+    const html = createDeliveryHtml(snapshot, planImage, svg, 'print', snapshot.printSettings!);
+
+    downloadBlob(html, 'text/html;charset=utf-8', fileName);
+    setStatusText('已导出 PDF 打印报告 HTML，请用 Chrome 打印为 PDF');
+  };
+
+  const exportDxfDraft = () => {
+    const fileName = `${design.name || '全屋设计'}-DXF草案.dxf`;
+    const snapshot = createExportSnapshot('dxf-draft', fileName);
+    const content = createDxfDraft(snapshot, snapshot.exportDraftSettings!);
+
+    downloadBlob(content, 'application/dxf;charset=utf-8', fileName);
+    setStatusText('已导出 DXF 草案');
+  };
+
+  const exportModelDraft = (format: 'glb' | 'obj') => {
+    const kind = format === 'glb' ? 'glb-draft' : 'obj-draft';
+    const fileName = `${design.name || '全屋设计'}-${format.toUpperCase()}草案.json`;
+    const snapshot = createExportSnapshot(kind, fileName);
+    const content = createModelDraft(snapshot, format, snapshot.exportDraftSettings!);
+
+    downloadBlob(content, 'application/json;charset=utf-8', fileName);
+    setStatusText(`已导出 ${format.toUpperCase()} 草案`);
+  };
+
   const exportThreeDPng = () => {
     threeViewerRef.current?.exportPng();
+    createExportSnapshot('3d-png', `${design.name || '全屋设计'}-3D效果图.png`);
     setStatusText('已导出 3D 效果图');
   };
 
@@ -1020,6 +1087,7 @@ export default function App() {
     try {
       const result = await recognizeFloorplanWalls(design.backgroundImage, {
         gridSize: design.canvas.gridSize,
+        scalePxPerMeter: design.canvas.scalePxPerMeter,
         mode: recognitionMode
       });
 
@@ -1048,7 +1116,9 @@ export default function App() {
       setImportWizardOpen(false);
       setMode('select');
       setViewMode('plan');
-      setStatusText(`已识别到独立图层：${result.walls.length} 面墙，可先修正再写入正式方案`);
+      setStatusText(
+        `已识别到独立图层：${result.walls.length} 面墙、${result.openingCandidates.length} 个门窗候选、${result.roomCandidates.length} 个房间候选`
+      );
     } catch {
       setStatusText('自动识别失败，请换更清晰的户型图后重试');
     } finally {
@@ -1081,20 +1151,60 @@ export default function App() {
     updateRecognitionLayer(
       (recognition) => ({
         ...recognition,
+        selectedOpeningCandidateIds: [],
+        selectedRoomCandidateIds: [],
         selectedWallIds: recognition.walls.filter((wall) => wall.status === 'active').map((wall) => wall.id)
       }),
       '已选中全部可写入识别墙'
     );
   };
 
+  const selectAllRecognitionOpenings = () => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        selectedWallIds: [],
+        selectedRoomCandidateIds: [],
+        selectedOpeningCandidateIds: (recognition.openingCandidates ?? [])
+          .filter((candidate) => candidate.status === 'active')
+          .map((candidate) => candidate.id)
+      }),
+      '已选中全部门窗候选'
+    );
+  };
+
+  const selectAllRecognitionRooms = () => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        selectedWallIds: [],
+        selectedOpeningCandidateIds: [],
+        selectedRoomCandidateIds: (recognition.roomCandidates ?? [])
+          .filter((candidate) => candidate.status === 'active')
+          .map((candidate) => candidate.id)
+      }),
+      '已选中全部房间候选'
+    );
+  };
+
   const clearRecognitionSelection = () => {
-    updateRecognitionLayer((recognition) => ({ ...recognition, selectedWallIds: [] }), '已清空识别墙选择');
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        selectedWallIds: [],
+        selectedOpeningCandidateIds: [],
+        selectedRoomCandidateIds: []
+      }),
+      '已清空识别候选选择'
+    );
   };
 
   const deleteSelectedRecognitionWalls = () => {
     const selectedIds = new Set(selectedRecognitionIds);
+    const selectedOpeningIds = new Set(selectedRecognitionOpeningIds);
+    const selectedRoomIds = new Set(selectedRecognitionRoomIds);
 
-    if (selectedIds.size === 0) {
+    if (selectedRecognitionCandidateCount === 0) {
       return;
     }
 
@@ -1102,13 +1212,25 @@ export default function App() {
       (recognition) => ({
         ...recognition,
         selectedWallIds: [],
+        selectedOpeningCandidateIds: [],
+        selectedRoomCandidateIds: [],
         walls: recognition.walls.map((wall) =>
           selectedIds.has(wall.id) && wall.status === 'active'
             ? { ...wall, status: 'deleted', updatedAt: new Date().toISOString() }
             : wall
+        ),
+        openingCandidates: (recognition.openingCandidates ?? []).map((candidate) =>
+          selectedOpeningIds.has(candidate.id) && candidate.status === 'active'
+            ? { ...candidate, status: 'deleted', updatedAt: new Date().toISOString() }
+            : candidate
+        ),
+        roomCandidates: (recognition.roomCandidates ?? []).map((candidate) =>
+          selectedRoomIds.has(candidate.id) && candidate.status === 'active'
+            ? { ...candidate, status: 'deleted', updatedAt: new Date().toISOString() }
+            : candidate
         )
       }),
-      `已删除 ${selectedIds.size} 面识别墙`
+      `已删除 ${selectedRecognitionCandidateCount} 个识别候选`
     );
   };
 
@@ -1118,9 +1240,15 @@ export default function App() {
         ...recognition,
         walls: recognition.walls.map((wall) =>
           wall.status === 'deleted' ? { ...wall, status: 'active', updatedAt: new Date().toISOString() } : wall
+        ),
+        openingCandidates: (recognition.openingCandidates ?? []).map((candidate) =>
+          candidate.status === 'deleted' ? { ...candidate, status: 'active', updatedAt: new Date().toISOString() } : candidate
+        ),
+        roomCandidates: (recognition.roomCandidates ?? []).map((candidate) =>
+          candidate.status === 'deleted' ? { ...candidate, status: 'active', updatedAt: new Date().toISOString() } : candidate
         )
       }),
-      '已恢复删除的识别墙'
+      '已恢复删除的识别候选'
     );
   };
 
@@ -1210,6 +1338,166 @@ export default function App() {
     setStatusText(scope === 'all' ? '已将全部识别墙写入正式方案' : '已将选中识别墙写入正式方案');
   };
 
+  const promoteRecognitionOpenings = (scope: 'selected' | 'all') => {
+    const selectedIds = new Set(selectedRecognitionOpeningIds);
+    let promotedCount = 0;
+
+    commitChange((current) => {
+      if (!current.recognition) {
+        return current;
+      }
+
+      const sourceCandidates = (current.recognition.openingCandidates ?? []).filter(
+        (candidate) => candidate.status === 'active' && (scope === 'all' || selectedIds.has(candidate.id))
+      );
+
+      if (sourceCandidates.length === 0) {
+        return current;
+      }
+
+      const promotedPairs = sourceCandidates.reduce<Array<{ candidateId: string; opening: DesignDocument['openings'][number] }>>(
+        (items, candidate) => {
+          const promotedWallId = candidate.wallId
+            ? current.recognition?.walls.find((wall) => wall.id === candidate.wallId)?.promotedWallId
+            : undefined;
+
+          if (!promotedWallId) {
+            return items;
+          }
+
+          items.push({
+            candidateId: candidate.id,
+            opening: {
+              id: createId(candidate.kind),
+              kind: candidate.kind,
+              wallId: promotedWallId,
+              x: candidate.x,
+              y: candidate.y,
+              width: candidate.width,
+              rotation: candidate.rotation
+            }
+          });
+          return items;
+        },
+        []
+      );
+
+      if (promotedPairs.length === 0) {
+        return current;
+      }
+
+      promotedCount = promotedPairs.length;
+      const promotedMap = new Map(promotedPairs.map((item) => [item.candidateId, item.opening.id]));
+      const recognition = withRecognitionCounts({
+        ...current.recognition,
+        status: 'confirmed',
+        selectedOpeningCandidateIds: [],
+        openingCandidates: (current.recognition.openingCandidates ?? []).map((candidate) =>
+          promotedMap.has(candidate.id)
+            ? {
+                ...candidate,
+                status: 'promoted',
+                promotedOpeningId: promotedMap.get(candidate.id),
+                updatedAt: new Date().toISOString()
+              }
+            : candidate
+        )
+      });
+
+      return {
+        ...current,
+        openings: [...current.openings, ...promotedPairs.map((item) => item.opening)],
+        recognition
+      };
+    });
+
+    setStatusText(
+      promotedCount > 0
+        ? `已写入 ${promotedCount} 个识别门窗`
+        : '请先写入相关识别墙，再写入门窗候选'
+    );
+  };
+
+  const promoteRecognitionRooms = (scope: 'selected' | 'all') => {
+    const selectedIds = new Set(selectedRecognitionRoomIds);
+    let promotedCount = 0;
+
+    commitChange((current) => {
+      if (!current.recognition) {
+        return current;
+      }
+
+      const sourceCandidates = (current.recognition.roomCandidates ?? []).filter(
+        (candidate) => candidate.status === 'active' && (scope === 'all' || selectedIds.has(candidate.id))
+      );
+
+      if (sourceCandidates.length === 0) {
+        return current;
+      }
+
+      const colors = ['#7cc8a8', '#8fb7e8', '#e5b56c', '#d98f8f'];
+      const promotedPairs = sourceCandidates.map((candidate, index) => ({
+        candidateId: candidate.id,
+        roomZone: {
+          id: createId('room-zone'),
+          name: candidate.name ?? `识别房间 ${(current.roomZones ?? []).length + index + 1}`,
+          points: candidate.points,
+          label: candidate.label,
+          manualAreaSqm: candidate.areaSqm,
+          materialIds: { ...DEFAULT_ROOM_ZONE_MATERIAL_IDS },
+          color: colors[((current.roomZones ?? []).length + index) % colors.length]
+        }
+      }));
+
+      promotedCount = promotedPairs.length;
+      const promotedMap = new Map(promotedPairs.map((item) => [item.candidateId, item.roomZone.id]));
+      const recognition = withRecognitionCounts({
+        ...current.recognition,
+        status: 'confirmed',
+        selectedRoomCandidateIds: [],
+        roomCandidates: (current.recognition.roomCandidates ?? []).map((candidate) =>
+          promotedMap.has(candidate.id)
+            ? {
+                ...candidate,
+                status: 'promoted',
+                promotedRoomZoneId: promotedMap.get(candidate.id),
+                updatedAt: new Date().toISOString()
+              }
+            : candidate
+        )
+      });
+
+      return {
+        ...current,
+        roomZones: [...(current.roomZones ?? []), ...promotedPairs.map((item) => item.roomZone)],
+        recognition
+      };
+    });
+    setStatusText(scope === 'all' ? `已写入 ${promotedCount} 个房间区域` : `已写入 ${promotedCount} 个选中房间区域`);
+  };
+
+  const saveAiRecognitionDraft = () => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        aiRecognitionDraft: {
+          id: createId('ai-recognition'),
+          status: 'draft',
+          createdAt: new Date().toISOString(),
+          sourceFileName: recognition.sourceFileName,
+          mode: recognition.parameters.mode,
+          inputSnapshot: {
+            backgroundFileName: design.backgroundImage?.fileName ?? recognition.sourceFileName,
+            scalePxPerMeter: design.canvas.scalePxPerMeter,
+            gridSize: design.canvas.gridSize
+          },
+          note: '本地保存 AI 识别草稿，后续可接入云端识别服务。'
+        }
+      }),
+      '已保存 AI 识别草稿'
+    );
+  };
+
   const discardRecognitionLayer = () => {
     commitChange((current) => ({ ...current, recognition: undefined }), null);
     setImportWizardOpen(false);
@@ -1251,9 +1539,15 @@ export default function App() {
         onSave={handleSave}
         onOpen={handleOpen}
         onExportPng={exportPng}
+        onExportSvg={exportSvgPlan}
         onExportJson={exportJson}
         onExportEstimateCsv={exportEstimateCsv}
         onExportHtmlReport={exportHtmlReport}
+        onExportPrintLayout={exportPrintLayout}
+        onExportPdfReport={exportPdfReport}
+        onExportDxfDraft={exportDxfDraft}
+        onExportGlbDraft={() => exportModelDraft('glb')}
+        onExportObjDraft={() => exportModelDraft('obj')}
         onExport3DPng={exportThreeDPng}
         onViewModeChange={(nextMode) => {
           setViewMode(nextMode);
@@ -1382,14 +1676,22 @@ export default function App() {
           onWallDrawModeChange={changeWallDrawMode}
           onToggleWallLengths={toggleWallLengths}
           onExportJson={exportJson}
+          onExportSvg={exportSvgPlan}
           onExportEstimateCsv={exportEstimateCsv}
           onExportHtmlReport={exportHtmlReport}
+          onExportPrintLayout={exportPrintLayout}
+          onExportPdfReport={exportPdfReport}
+          onExportDxfDraft={exportDxfDraft}
+          onExportGlbDraft={() => exportModelDraft('glb')}
+          onExportObjDraft={() => exportModelDraft('obj')}
           onStartCalibration={startCalibration}
           onRecognizeFloorplan={recognizeFloorplan}
           recognitionMode={recognitionMode}
           onRecognitionModeChange={setRecognitionMode}
           onKeepBackgroundReference={keepBackgroundAsReference}
           onSelectAllRecognitionWalls={selectAllRecognitionWalls}
+          onSelectAllRecognitionOpenings={selectAllRecognitionOpenings}
+          onSelectAllRecognitionRooms={selectAllRecognitionRooms}
           onClearRecognitionSelection={clearRecognitionSelection}
           onDeleteSelectedRecognitionWalls={deleteSelectedRecognitionWalls}
           onRestoreDeletedRecognitionWalls={restoreDeletedRecognitionWalls}
@@ -1397,6 +1699,11 @@ export default function App() {
           onMergeAllRecognitionWalls={mergeAllRecognitionWalls}
           onPromoteSelectedRecognitionWalls={() => promoteRecognitionWalls('selected')}
           onPromoteAllRecognitionWalls={() => promoteRecognitionWalls('all')}
+          onPromoteSelectedRecognitionOpenings={() => promoteRecognitionOpenings('selected')}
+          onPromoteAllRecognitionOpenings={() => promoteRecognitionOpenings('all')}
+          onPromoteSelectedRecognitionRooms={() => promoteRecognitionRooms('selected')}
+          onPromoteAllRecognitionRooms={() => promoteRecognitionRooms('all')}
+          onSaveAiRecognitionDraft={saveAiRecognitionDraft}
           onDiscardRecognitionLayer={discardRecognitionLayer}
           recognizingFloorplan={recognizingFloorplan}
           importWizardOpen={importWizardOpen}

@@ -35,9 +35,15 @@ type TopBarProps = {
   onSave: () => void;
   onOpen: (id: string) => void;
   onExportPng: () => void;
+  onExportSvg: () => void;
   onExportJson: () => void;
   onExportEstimateCsv: () => void;
   onExportHtmlReport: () => void;
+  onExportPrintLayout: () => void;
+  onExportPdfReport: () => void;
+  onExportDxfDraft: () => void;
+  onExportGlbDraft: () => void;
+  onExportObjDraft: () => void;
   onExport3DPng: () => void;
   onViewModeChange: (mode: ViewMode) => void;
   onFitView: () => void;
@@ -73,9 +79,15 @@ export default function TopBar({
   onSave,
   onOpen,
   onExportPng,
+  onExportSvg,
   onExportJson,
   onExportEstimateCsv,
   onExportHtmlReport,
+  onExportPrintLayout,
+  onExportPdfReport,
+  onExportDxfDraft,
+  onExportGlbDraft,
+  onExportObjDraft,
   onExport3DPng,
   onViewModeChange,
   onFitView,
@@ -119,22 +131,54 @@ export default function TopBar({
             ))}
           </select>
         </label>
-        <button className="icon-button command-button" onClick={onExportPng} title="导出 PNG 平面图" type="button">
-          <Download size={17} />
-          <span>平面图</span>
-        </button>
-        <button className="icon-button command-button" onClick={onExportJson} title="导出方案 JSON" type="button">
-          <FileJson size={17} />
-          <span>JSON</span>
-        </button>
-        <button className="icon-button command-button" onClick={onExportEstimateCsv} title="导出预算 CSV" type="button">
-          <FileSpreadsheet size={17} />
-          <span>预算</span>
-        </button>
-        <button className="icon-button command-button" onClick={onExportHtmlReport} title="导出 HTML 交付报告" type="button">
-          <FileText size={17} />
-          <span>报告</span>
-        </button>
+        <details className="export-menu">
+          <summary className="icon-button command-button" title="导出">
+            <Download size={17} />
+            <span>导出</span>
+          </summary>
+          <div className="export-menu-list">
+            <button type="button" onClick={onExportPng}>
+              <Download size={15} />
+              PNG 平面图
+            </button>
+            <button type="button" onClick={onExportSvg}>
+              <ImageDown size={15} />
+              SVG 平面图
+            </button>
+            <button type="button" onClick={onExportJson}>
+              <FileJson size={15} />
+              方案 JSON
+            </button>
+            <button type="button" onClick={onExportEstimateCsv}>
+              <FileSpreadsheet size={15} />
+              预算 CSV
+            </button>
+            <button type="button" onClick={onExportHtmlReport}>
+              <FileText size={15} />
+              HTML 报告
+            </button>
+            <button type="button" onClick={onExportPrintLayout}>
+              <FileText size={15} />
+              打印布局
+            </button>
+            <button type="button" onClick={onExportPdfReport}>
+              <FileText size={15} />
+              PDF 打印页
+            </button>
+            <button type="button" onClick={onExportDxfDraft}>
+              <FileJson size={15} />
+              DXF 草案
+            </button>
+            <button type="button" onClick={onExportGlbDraft}>
+              <FileJson size={15} />
+              GLB 草案
+            </button>
+            <button type="button" onClick={onExportObjDraft}>
+              <FileJson size={15} />
+              OBJ 草案
+            </button>
+          </div>
+        </details>
         {viewMode === 'threeD' && (
           <button className="icon-button command-button" onClick={onExport3DPng} title="导出 3D 效果图" type="button">
             <ImageDown size={17} />

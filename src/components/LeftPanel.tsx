@@ -100,16 +100,18 @@ export default function LeftPanel({
 }: LeftPanelProps) {
   const styleOptions = ['现代', '北欧', '轻奢', '收纳', '儿童', '实用'];
   const materialOptions = FURNITURE_MATERIAL_LIBRARY.map((material) => material.name);
-  const categoryOptions = [
-    '全部',
-    '已使用',
-    '收藏',
-    '推荐',
-    '组合',
-    ...styleOptions,
-    ...materialOptions,
-    ...FURNITURE_CATEGORIES.filter((category) => category !== '全部')
-  ];
+  const categoryOptions = Array.from(
+    new Set([
+      '全部',
+      '已使用',
+      '收藏',
+      '推荐',
+      '组合',
+      ...styleOptions,
+      ...materialOptions,
+      ...FURNITURE_CATEGORIES.filter((category) => category !== '全部')
+    ])
+  );
   const recommendationRoomKeys = getRecommendationRoomKeys(recommendedRoomNames);
   const filteredFurniture = FURNITURE_LIBRARY.filter((item) => {
     const favorite = favoriteFurnitureIds.includes(item.id);
