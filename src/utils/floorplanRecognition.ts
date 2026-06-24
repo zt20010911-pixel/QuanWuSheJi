@@ -50,6 +50,9 @@ export type FloorplanRecognitionResult = {
 
 const DARK_LUMA_THRESHOLD = 112;
 const DARK_CHANNEL_THRESHOLD = 145;
+const STRUCTURAL_LUMA_THRESHOLD = 190;
+const STRUCTURAL_CHANNEL_THRESHOLD = 210;
+const STRUCTURAL_CHANNEL_SPREAD = 42;
 const MIN_WALL_THICKNESS = 5;
 const MAX_WALL_THICKNESS = 28;
 const RUN_LIGHT_GAP = 4;
@@ -72,7 +75,27 @@ const isDarkWallPixel = (red: number, green: number, blue: number, alpha: number
   return luma < DARK_LUMA_THRESHOLD && red < DARK_CHANNEL_THRESHOLD && green < DARK_CHANNEL_THRESHOLD && blue < DARK_CHANNEL_THRESHOLD;
 };
 
-const createDarkMask = async (backgroundImage: BackgroundImage) => {
+const isStructuralWallPixel = (red: number, green: number, blue: number, alpha: number) => {
+  if (isDarkWallPixel(red, green, blue, alpha)) {
+    return true;
+  }
+
+  if (alpha < 30) {
+    return false;
+  }
+
+  const luma = red * 0.299 + green * 0.587 + blue * 0.114;
+  const maxChannel = Math.max(red, green, blue);
+  const minChannel = Math.min(red, green, blue);
+
+  return (
+    luma < STRUCTURAL_LUMA_THRESHOLD &&
+    maxChannel < STRUCTURAL_CHANNEL_THRESHOLD &&
+    maxChannel - minChannel <= STRUCTURAL_CHANNEL_SPREAD
+  );
+};
+
+const createWallMask = async (backgroundImage: BackgroundImage, mode: RecognitionMode) => {
   const image = await loadImage(backgroundImage.dataUrl);
   const width = Math.max(1, Math.round(backgroundImage.width));
   const height = Math.max(1, Math.round(backgroundImage.height));
@@ -92,12 +115,15 @@ const createDarkMask = async (backgroundImage: BackgroundImage) => {
 
   for (let index = 0; index < imageData.data.length; index += 4) {
     const pixelIndex = index / 4;
-    mask[pixelIndex] = isDarkWallPixel(
-      imageData.data[index],
-      imageData.data[index + 1],
-      imageData.data[index + 2],
-      imageData.data[index + 3]
-    )
+    const red = imageData.data[index];
+    const green = imageData.data[index + 1];
+    const blue = imageData.data[index + 2];
+    const alpha = imageData.data[index + 3];
+    const wallPixel = mode === 'complete'
+      ? isStructuralWallPixel(red, green, blue, alpha)
+      : isDarkWallPixel(red, green, blue, alpha);
+
+    mask[pixelIndex] = wallPixel
       ? 1
       : 0;
   }
@@ -570,22 +596,29 @@ const filterRecognizedWalls = (
   minWallLength: number,
   mode: RecognitionMode
 ) => {
-  const threshold = mode === 'complete' ? 42 : 58;
+  const threshold = mode === 'complete' ? 38 : 58;
   const scoredWalls = getScoredWalls(walls, gridSize, imageSize, minWallLength);
 
   return scoredWalls
     .filter(({ score, wall }) => {
       const length = getWallLength(wall);
-      const keepLongBoundary = mode === 'complete' && score >= 34 && length >= minWallLength * 1.35;
+      const keepLongBoundary = mode === 'complete' && score >= 30 && length >= minWallLength * 1.18;
       return score >= threshold || keepLongBoundary;
     })
     .map(({ wall, score }) => toRecognizedWall(wall, score, 'scan'));
 };
 
+const dedupeRecognizedWalls = (walls: RecognizedFloorplanWall[], gridSize: number) =>
+  dedupeWalls(walls, gridSize).map((wall) => ({
+    ...wall,
+    confidence: 'confidence' in wall ? wall.confidence : 0.5,
+    source: 'source' in wall ? wall.source : 'inferred'
+  })) as RecognizedFloorplanWall[];
+
 const createBridgeWalls = (walls: RecognizedFloorplanWall[], gridSize: number, minWallLength: number) => {
   const bridgeWalls: RecognizedFloorplanWall[] = [];
   const lineTolerance = Math.max(gridSize * 0.8, 16);
-  const maxGap = Math.max(gridSize * 3.2, minWallLength * 0.72);
+  const maxGap = Math.max(gridSize * 5.5, minWallLength * 1.22);
 
   (['horizontal', 'vertical'] as const).forEach((orientation) => {
     const orientedWalls = walls
@@ -649,6 +682,104 @@ const createBridgeWalls = (walls: RecognizedFloorplanWall[], gridSize: number, m
   });
 
   return bridgeWalls;
+};
+
+const hasPerpendicularSupport = (
+  walls: RecognizedFloorplanWall[],
+  orientation: 'horizontal' | 'vertical',
+  lineCoordinate: number,
+  crossCoordinate: number,
+  tolerance: number
+) => {
+  const supportSpan = tolerance * 2.2;
+  const coverage = getWallCoverageOnLine(
+    walls,
+    orientation,
+    lineCoordinate,
+    crossCoordinate - supportSpan,
+    crossCoordinate + supportSpan,
+    tolerance
+  );
+
+  return coverage >= supportSpan * 0.52;
+};
+
+const createGridCompletionWalls = (
+  walls: RecognizedFloorplanWall[],
+  gridSize: number,
+  minWallLength: number
+): RecognizedFloorplanWall[] => {
+  if (walls.length < 4) {
+    return [];
+  }
+
+  const lineTolerance = Math.max(gridSize * 1.12, 22);
+  const minCompletionLength = Math.max(minWallLength * 0.72, gridSize * 2.4);
+  const horizontalWalls = walls.filter(isHorizontalWall);
+  const verticalWalls = walls.filter((wall) => !isHorizontalWall(wall));
+  const xLines = clusterAxisValues(verticalWalls.map(getWallLineCoordinate), lineTolerance);
+  const yLines = clusterAxisValues(horizontalWalls.map(getWallLineCoordinate), lineTolerance);
+  const completionWalls: RecognizedFloorplanWall[] = [];
+
+  yLines.forEach((y) => {
+    for (let index = 0; index < xLines.length - 1; index += 1) {
+      const left = xLines[index];
+      const right = xLines[index + 1];
+      const length = right - left;
+
+      if (length < minCompletionLength) {
+        continue;
+      }
+
+      const coverage = getWallCoverageOnLine(walls, 'horizontal', y, left, right, lineTolerance) / length;
+      const leftSupported = hasPerpendicularSupport(walls, 'vertical', left, y, lineTolerance);
+      const rightSupported = hasPerpendicularSupport(walls, 'vertical', right, y, lineTolerance);
+
+      if (coverage >= 0.82 || coverage < 0.08 || !leftSupported || !rightSupported) {
+        continue;
+      }
+
+      completionWalls.push({
+        id: createId('auto-wall'),
+        start: { x: snapValue(left, gridSize), y: snapValue(y, gridSize) },
+        end: { x: snapValue(right, gridSize), y: snapValue(y, gridSize) },
+        thickness: Math.max(MIN_WALL_THICKNESS + 5, Math.round(gridSize * 0.48)),
+        confidence: Math.min(0.7, Math.max(0.42, 0.42 + coverage * 0.26)),
+        source: 'inferred'
+      });
+    }
+  });
+
+  xLines.forEach((x) => {
+    for (let index = 0; index < yLines.length - 1; index += 1) {
+      const top = yLines[index];
+      const bottom = yLines[index + 1];
+      const length = bottom - top;
+
+      if (length < minCompletionLength) {
+        continue;
+      }
+
+      const coverage = getWallCoverageOnLine(walls, 'vertical', x, top, bottom, lineTolerance) / length;
+      const topSupported = hasPerpendicularSupport(walls, 'horizontal', top, x, lineTolerance);
+      const bottomSupported = hasPerpendicularSupport(walls, 'horizontal', bottom, x, lineTolerance);
+
+      if (coverage >= 0.82 || coverage < 0.08 || !topSupported || !bottomSupported) {
+        continue;
+      }
+
+      completionWalls.push({
+        id: createId('auto-wall'),
+        start: { x: snapValue(x, gridSize), y: snapValue(top, gridSize) },
+        end: { x: snapValue(x, gridSize), y: snapValue(bottom, gridSize) },
+        thickness: Math.max(MIN_WALL_THICKNESS + 5, Math.round(gridSize * 0.48)),
+        confidence: Math.min(0.7, Math.max(0.42, 0.42 + coverage * 0.26)),
+        source: 'inferred'
+      });
+    }
+  });
+
+  return completionWalls;
 };
 
 const getUnionLength = (ranges: Run[]) => {
@@ -949,12 +1080,18 @@ export const recognizeFloorplanWalls = async (
   backgroundImage: BackgroundImage,
   options: RecognizeOptions
 ): Promise<FloorplanRecognitionResult> => {
-  const { mask, width, height } = await createDarkMask(backgroundImage);
   const mode = options.mode ?? 'complete';
-  const minRunLength = Math.max(options.gridSize * 3, Math.min(width, height) * 0.055);
+  const { mask, width, height } = await createWallMask(backgroundImage, mode);
+  const minRunLength =
+    mode === 'complete'
+      ? Math.max(options.gridSize * 2.1, Math.min(width, height) * 0.034)
+      : Math.max(options.gridSize * 3, Math.min(width, height) * 0.055);
   const horizontalBands = extractBands(mask, width, height, 'horizontal', minRunLength);
   const verticalBands = extractBands(mask, width, height, 'vertical', minRunLength);
-  const minWallLength = Math.max(options.gridSize * 4, Math.min(width, height) * 0.07);
+  const minWallLength =
+    mode === 'complete'
+      ? Math.max(options.gridSize * 2.7, Math.min(width, height) * 0.046)
+      : Math.max(options.gridSize * 4, Math.min(width, height) * 0.07);
   const rawWalls = [
     ...horizontalBands.map((band) => toWall(band, 'horizontal', backgroundImage, options.gridSize)),
     ...verticalBands.map((band) => toWall(band, 'vertical', backgroundImage, options.gridSize))
@@ -965,7 +1102,9 @@ export const recognizeFloorplanWalls = async (
   );
   const recognizedWalls = filterRecognizedWalls(candidateWalls, options.gridSize, Math.min(width, height), minWallLength, mode);
   const inferredWalls = mode === 'complete' ? createBridgeWalls(recognizedWalls, options.gridSize, minWallLength) : [];
-  const walls = [...recognizedWalls, ...inferredWalls];
+  const bridgedWalls = mode === 'complete' ? dedupeRecognizedWalls([...recognizedWalls, ...inferredWalls], options.gridSize) : recognizedWalls;
+  const completionWalls = mode === 'complete' ? createGridCompletionWalls(bridgedWalls, options.gridSize, minWallLength) : [];
+  const walls = mode === 'complete' ? dedupeRecognizedWalls([...bridgedWalls, ...completionWalls], options.gridSize) : recognizedWalls;
   const openingCandidates = createOpeningCandidates(recognizedWalls, walls, options.gridSize, options.scalePxPerMeter);
   const roomCandidates = createRoomCandidates(walls, options.gridSize, options.scalePxPerMeter);
   const qualityReport = createQualityReport(walls, openingCandidates, roomCandidates, options.gridSize, options.scalePxPerMeter);
@@ -981,6 +1120,6 @@ export const recognizeFloorplanWalls = async (
     mode,
     rawWallCount: rawWalls.length,
     candidateWallCount: candidateWalls.length,
-    inferredWallCount: inferredWalls.length
+    inferredWallCount: walls.filter((wall) => wall.source === 'inferred').length
   };
 };
