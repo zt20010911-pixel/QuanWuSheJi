@@ -345,12 +345,49 @@ button:disabled {
 
 .draw-mode-toggle {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
   gap: 4px;
   border: 1px solid #d2dad6;
   border-radius: 6px;
   padding: 3px;
   background: #ffffff;
+}
+
+.crop-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.crop-field-grid label {
+  display: grid;
+  gap: 4px;
+  color: #536071;
+  font-size: 12px;
+}
+
+.crop-field-grid input {
+  min-width: 0;
+  height: 32px;
+}
+
+.sampled-color-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 6px;
+  padding: 8px;
+  background: #f6faf8;
+  color: #536071;
+  font-size: 12px;
+}
+
+.sampled-color-preview > span {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border: 1px solid #c8d4ce;
+  border-radius: 5px;
 }
 
 .draw-mode-toggle button {

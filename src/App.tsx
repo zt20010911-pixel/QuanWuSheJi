@@ -19,9 +19,14 @@ import type {
   FurnitureInstance,
   MaterialBrushState,
   Point,
+  RecognitionAttemptSnapshot,
+  RecognitionCropBox,
+  RecognitionIssueMarker,
   RecognitionOpeningCandidate,
   RecognitionMode,
+  RecognitionProfile,
   RecognitionRoomCandidate,
+  RecognitionSampledWallColor,
   RecognitionSession,
   RecognitionWall,
   Selection,
@@ -58,6 +63,14 @@ const readFileAsDataUrl = (file: File) =>
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
+  });
+
+const loadImageElement = (dataUrl: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('图片读取失败'));
+    image.src = dataUrl;
   });
 
 const escapeHtml = (value: string | number | undefined) =>
@@ -153,10 +166,71 @@ const getWallLength = (wall: Wall) => Math.hypot(wall.end.x - wall.start.x, wall
 
 const isHorizontalWall = (wall: Wall) => Math.abs(wall.start.y - wall.end.y) <= Math.abs(wall.start.x - wall.end.x);
 
+const createDefaultRecognitionCropBox = (backgroundImage: BackgroundImage): RecognitionCropBox => {
+  const insetX = Math.round(backgroundImage.width * 0.06);
+  const insetY = Math.round(backgroundImage.height * 0.06);
+
+  return {
+    x: Math.round(backgroundImage.x + insetX),
+    y: Math.round(backgroundImage.y + insetY),
+    width: Math.round(Math.max(backgroundImage.width - insetX * 2, backgroundImage.width * 0.65)),
+    height: Math.round(Math.max(backgroundImage.height - insetY * 2, backgroundImage.height * 0.65))
+  };
+};
+
+const createRecognitionAttemptSnapshot = (
+  result: Awaited<ReturnType<typeof recognizeFloorplanWalls>>
+): RecognitionAttemptSnapshot => ({
+  id: createId('recognition-attempt'),
+  createdAt: new Date().toISOString(),
+  profile: result.profile,
+  mode: result.mode,
+  wallCount: result.walls.length,
+  openingCandidateCount: result.openingCandidates.length,
+  roomCandidateCount: result.roomCandidates.length,
+  outerFrameCoverage: result.qualityReport.outerFrameCoverage,
+  disconnectedEndpointCount: result.qualityReport.disconnectedEndpointCount,
+  missingWallHintCount: result.qualityReport.missingWallHintCount,
+  qualityScore: result.qualityReport.qualityScore
+});
+
+const sampleBackgroundWallColor = async (
+  backgroundImage: BackgroundImage,
+  point: Point
+): Promise<RecognitionSampledWallColor | null> => {
+  const localX = Math.round(point.x - backgroundImage.x);
+  const localY = Math.round(point.y - backgroundImage.y);
+
+  if (localX < 0 || localY < 0 || localX > backgroundImage.width || localY > backgroundImage.height) {
+    return null;
+  }
+
+  const image = await loadImageElement(backgroundImage.dataUrl);
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+
+  if (!context) {
+    return null;
+  }
+
+  canvas.width = Math.max(1, Math.round(backgroundImage.width));
+  canvas.height = Math.max(1, Math.round(backgroundImage.height));
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const pixel = context.getImageData(Math.min(localX, canvas.width - 1), Math.min(localY, canvas.height - 1), 1, 1).data;
+
+  return {
+    r: pixel[0],
+    g: pixel[1],
+    b: pixel[2],
+    tolerance: 58
+  };
+};
+
 const createRecognitionSession = (
   result: Awaited<ReturnType<typeof recognizeFloorplanWalls>>,
   backgroundImage: BackgroundImage,
-  gridSize: number
+  gridSize: number,
+  previousRecognition?: RecognitionSession | null
 ): RecognitionSession => {
   const walls: RecognitionWall[] = result.walls.map((wall) => ({
     ...wall,
@@ -174,6 +248,7 @@ const createRecognitionSession = (
   }));
   const wallCount = walls.length;
   const confidence = wallCount >= 12 ? '高' : wallCount >= 6 ? '中' : '低';
+  const attemptSnapshot = createRecognitionAttemptSnapshot(result);
 
   return {
     id: createId('recognition'),
@@ -191,12 +266,17 @@ const createRecognitionSession = (
     roomCandidates,
     qualityReport: result.qualityReport,
     candidateFilters: { ...DEFAULT_RECOGNITION_CANDIDATE_FILTERS },
+    attemptHistory: [attemptSnapshot, ...(previousRecognition?.attemptHistory ?? [])].slice(0, 2),
     wallCount,
     horizontalCount: result.horizontalCount,
     verticalCount: result.verticalCount,
     confidence,
     parameters: {
       mode: result.mode,
+      profile: result.profile,
+      cropBox: result.cropBox,
+      sampledWallColor: result.sampledWallColor,
+      passes: result.passes,
       gridSize,
       minWallLength: result.minWallLength,
       rawWallCount: result.rawWallCount,
@@ -301,6 +381,10 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [recognizingFloorplan, setRecognizingFloorplan] = useState(false);
   const [recognitionMode, setRecognitionMode] = useState<RecognitionMode>('complete');
+  const [recognitionProfile, setRecognitionProfile] = useState<RecognitionProfile>('wall-priority');
+  const [recognitionCropBox, setRecognitionCropBox] = useState<RecognitionCropBox | null>(null);
+  const [sampledWallColor, setSampledWallColor] = useState<RecognitionSampledWallColor | undefined>();
+  const [samplingWallColor, setSamplingWallColor] = useState(false);
   const [importWizardOpen, setImportWizardOpen] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [wallDrawMode, setWallDrawMode] = useState<WallDrawMode>('single');
@@ -1051,6 +1135,12 @@ export default function App() {
   const handleBackgroundUpload = async (file: File) => {
     resetWallDraft();
     const backgroundImage = await createBackgroundImage(file, design.canvas.width, design.canvas.height);
+    const cropBox = createDefaultRecognitionCropBox(backgroundImage);
+    setRecognitionProfile('wall-priority');
+    setRecognitionMode('complete');
+    setRecognitionCropBox(cropBox);
+    setSampledWallColor(undefined);
+    setSamplingWallColor(false);
     commitChange((current) => ({ ...current, backgroundImage, recognition: undefined }), null);
     setImportWizardOpen(true);
     setMode('select');
@@ -1085,10 +1175,16 @@ export default function App() {
     setStatusText('正在识别到独立图层');
 
     try {
+      const cropBox = recognitionCropBox ?? design.recognition?.parameters.cropBox ?? createDefaultRecognitionCropBox(design.backgroundImage);
+      const mode = recognitionProfile === 'clean' ? 'precise' : recognitionMode;
+      const sampledColor = sampledWallColor ?? design.recognition?.parameters.sampledWallColor;
       const result = await recognizeFloorplanWalls(design.backgroundImage, {
         gridSize: design.canvas.gridSize,
         scalePxPerMeter: design.canvas.scalePxPerMeter,
-        mode: recognitionMode
+        mode,
+        profile: recognitionProfile,
+        cropBox,
+        sampledWallColor: sampledColor
       });
 
       if (result.walls.length === 0) {
@@ -1096,7 +1192,7 @@ export default function App() {
         return;
       }
 
-      const recognition = createRecognitionSession(result, design.backgroundImage, design.canvas.gridSize);
+      const recognition = createRecognitionSession(result, design.backgroundImage, design.canvas.gridSize, design.recognition);
 
       commitChange(
         (current) => ({
@@ -1114,10 +1210,11 @@ export default function App() {
         null
       );
       setImportWizardOpen(false);
+      setRecognitionCropBox(cropBox);
       setMode('select');
       setViewMode('plan');
       setStatusText(
-        `已识别到独立图层：${result.walls.length} 面墙、${result.openingCandidates.length} 个门窗候选、${result.roomCandidates.length} 个房间候选`
+        `已识别到独立图层：${result.walls.length} 面墙、${result.openingCandidates.length} 个门窗候选、${result.roomCandidates.length} 个房间候选，质量 ${result.qualityReport.qualityScore} 分`
       );
     } catch {
       setStatusText('自动识别失败，请换更清晰的户型图后重试');
@@ -1128,9 +1225,155 @@ export default function App() {
 
   const keepBackgroundAsReference = () => {
     setImportWizardOpen(false);
+    setSamplingWallColor(false);
     setMode('calibrate');
     setViewMode('plan');
     setStatusText('已保留底图作为参考，可继续标定比例或手动画墙');
+  };
+
+  const startWallColorSampling = () => {
+    if (!design.backgroundImage) {
+      setStatusText('请先上传户型底图');
+      return;
+    }
+
+    setSamplingWallColor(true);
+    setMode('select');
+    setViewMode('plan');
+    setStatusText('请在底图真实墙体上点击一次完成采样');
+  };
+
+  const handleWallColorSample = async (point: Point) => {
+    if (!design.backgroundImage || !samplingWallColor) {
+      return;
+    }
+
+    const sampled = await sampleBackgroundWallColor(design.backgroundImage, point);
+
+    if (!sampled) {
+      setStatusText('采样点不在户型底图内，请重新点击墙体');
+      return;
+    }
+
+    setSampledWallColor(sampled);
+    setSamplingWallColor(false);
+    setStatusText(`已采样墙体颜色 RGB(${sampled.r}, ${sampled.g}, ${sampled.b})`);
+  };
+
+  const updateRecognitionCropBox = (cropBox: RecognitionCropBox) => {
+    setRecognitionCropBox(cropBox);
+    commitChange((current) => ({
+      ...current,
+      recognition: current.recognition
+        ? {
+            ...current.recognition,
+            parameters: {
+              ...current.recognition.parameters,
+              cropBox
+            }
+          }
+        : current.recognition
+    }), null);
+  };
+
+  const createWallFromIssueMarker = (marker: RecognitionIssueMarker): RecognitionWall | null => {
+    if (!marker.proposedWall) {
+      return null;
+    }
+
+    return {
+      ...marker.proposedWall,
+      id: createId('rec-wall'),
+      status: 'active',
+      confidence: 0.48,
+      source: 'inferred',
+      updatedAt: new Date().toISOString()
+    };
+  };
+
+  const applyRecognitionIssueMarker = (markerId: string) => {
+    updateRecognitionLayer(
+      (recognition) => {
+        const markers = recognition.qualityReport?.issueMarkers ?? [];
+        const marker = markers.find((item) => item.id === markerId);
+        const wall = marker ? createWallFromIssueMarker(marker) : null;
+
+        if (!marker || !wall) {
+          return recognition;
+        }
+
+        return {
+          ...recognition,
+          selectedWallIds: [wall.id],
+          walls: [...recognition.walls, wall],
+          qualityReport: recognition.qualityReport
+            ? {
+                ...recognition.qualityReport,
+                outerGapMarkers: recognition.qualityReport.outerGapMarkers.map((item) =>
+                  item.id === markerId ? { ...item, status: 'resolved' } : item
+                ),
+                issueMarkers: recognition.qualityReport.issueMarkers.map((item) =>
+                  item.id === markerId ? { ...item, status: 'resolved' } : item
+                )
+              }
+            : recognition.qualityReport
+        };
+      },
+      '已根据缺口标记生成补墙'
+    );
+  };
+
+  const applyAllOuterGapMarkers = () => {
+    updateRecognitionLayer(
+      (recognition) => {
+        const markers = (recognition.qualityReport?.outerGapMarkers ?? []).filter((marker) => marker.status === 'active');
+        const walls = markers.map(createWallFromIssueMarker).filter((wall): wall is RecognitionWall => Boolean(wall));
+
+        if (walls.length === 0) {
+          return recognition;
+        }
+
+        const markerIds = new Set(markers.map((marker) => marker.id));
+
+        return {
+          ...recognition,
+          selectedWallIds: walls.map((wall) => wall.id),
+          walls: [...recognition.walls, ...walls],
+          qualityReport: recognition.qualityReport
+            ? {
+                ...recognition.qualityReport,
+                outerGapMarkers: recognition.qualityReport.outerGapMarkers.map((item) =>
+                  markerIds.has(item.id) ? { ...item, status: 'resolved' } : item
+                ),
+                issueMarkers: recognition.qualityReport.issueMarkers.map((item) =>
+                  markerIds.has(item.id) ? { ...item, status: 'resolved' } : item
+                )
+              }
+            : recognition.qualityReport
+        };
+      },
+      '已一键生成外框补墙候选'
+    );
+  };
+
+  const ignoreRecognitionIssueMarker = (markerId: string) => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        qualityReport: recognition.qualityReport
+          ? {
+              ...recognition.qualityReport,
+              outerGapMarkers: recognition.qualityReport.outerGapMarkers.map((item) =>
+                item.id === markerId ? { ...item, status: 'ignored' } : item
+              ),
+              issueMarkers: recognition.qualityReport.issueMarkers.map((item) =>
+                item.id === markerId ? { ...item, status: 'ignored' } : item
+              )
+            }
+          : recognition.qualityReport
+      }),
+      '已忽略该识别提示'
+    );
   };
 
   const updateRecognitionLayer = (updater: (recognition: RecognitionSession) => RecognitionSession, statusText: string) => {
@@ -1633,6 +1876,9 @@ export default function App() {
               stagePosition={stagePosition}
               draggedFurnitureId={draggedFurnitureId}
               recognitionLayer={recognitionLayer}
+              recognitionCropBox={recognitionCropBox ?? design.recognition?.parameters.cropBox ?? (design.backgroundImage ? createDefaultRecognitionCropBox(design.backgroundImage) : null)}
+              showRecognitionCropBox={Boolean(design.backgroundImage && (importWizardOpen || recognitionLayer) && !samplingWallColor)}
+              samplingWallColor={samplingWallColor}
               materialBrush={(design.materialBrush ?? DEFAULT_MATERIAL_BRUSH) as MaterialBrushState}
               wallDrawMode={wallDrawMode}
               showWallLengths={showWallLengths}
@@ -1647,6 +1893,8 @@ export default function App() {
               onDraftEnd={endDraft}
               onZoomChange={setZoom}
               onStagePositionChange={setStagePosition}
+              onRecognitionCropBoxChange={updateRecognitionCropBox}
+              onWallColorSample={handleWallColorSample}
             />
           ) : (
             <ThreeDViewer ref={threeViewerRef} design={design} />
@@ -1688,6 +1936,16 @@ export default function App() {
           onRecognizeFloorplan={recognizeFloorplan}
           recognitionMode={recognitionMode}
           onRecognitionModeChange={setRecognitionMode}
+          recognitionProfile={recognitionProfile}
+          onRecognitionProfileChange={setRecognitionProfile}
+          recognitionCropBox={recognitionCropBox ?? design.recognition?.parameters.cropBox ?? (design.backgroundImage ? createDefaultRecognitionCropBox(design.backgroundImage) : null)}
+          onRecognitionCropBoxChange={updateRecognitionCropBox}
+          sampledWallColor={sampledWallColor ?? design.recognition?.parameters.sampledWallColor}
+          samplingWallColor={samplingWallColor}
+          onStartWallColorSampling={startWallColorSampling}
+          onApplyAllOuterGaps={applyAllOuterGapMarkers}
+          onApplySelectedIssueMarker={applyRecognitionIssueMarker}
+          onIgnoreSelectedIssueMarker={ignoreRecognitionIssueMarker}
           onKeepBackgroundReference={keepBackgroundAsReference}
           onSelectAllRecognitionWalls={selectAllRecognitionWalls}
           onSelectAllRecognitionOpenings={selectAllRecognitionOpenings}

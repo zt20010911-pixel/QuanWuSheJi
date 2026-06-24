@@ -11,6 +11,7 @@ import type {
   MaterialBrushState,
   Opening,
   Point,
+  RecognitionCropBox,
   RecognitionSession,
   RecognitionWall,
   RoomLabel,
@@ -41,6 +42,9 @@ type DesignerCanvasProps = {
   stagePosition: Point;
   draggedFurnitureId: string | null;
   recognitionLayer?: RecognitionSession | null;
+  recognitionCropBox?: RecognitionCropBox | null;
+  showRecognitionCropBox?: boolean;
+  samplingWallColor?: boolean;
   materialBrush: MaterialBrushState;
   wallDrawMode: WallDrawMode;
   showWallLengths: boolean;
@@ -55,6 +59,8 @@ type DesignerCanvasProps = {
   onDraftEnd: () => void;
   onZoomChange: (zoom: number) => void;
   onStagePositionChange: (position: Point) => void;
+  onRecognitionCropBoxChange?: (cropBox: RecognitionCropBox) => void;
+  onWallColorSample?: (point: Point) => void;
 };
 
 const MIN_ZOOM = 0.35;
@@ -192,6 +198,9 @@ export default function DesignerCanvas({
   stagePosition,
   draggedFurnitureId,
   recognitionLayer,
+  recognitionCropBox,
+  showRecognitionCropBox = false,
+  samplingWallColor = false,
   materialBrush,
   wallDrawMode,
   showWallLengths,
@@ -205,7 +214,9 @@ export default function DesignerCanvas({
   onDraftChange,
   onDraftEnd,
   onZoomChange,
-  onStagePositionChange
+  onStagePositionChange,
+  onRecognitionCropBoxChange,
+  onWallColorSample
 }: DesignerCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 900, height: 700 });
@@ -488,22 +499,33 @@ export default function DesignerCanvas({
               disconnectedEndpointCount: 0,
               lowConfidenceCount: 0,
               possibleFurnitureNoiseCount: 0,
+              missingWallHintCount: 0,
+              outerGapMarkers: [],
+              issueMarkers: [],
+              qualityScore: 0,
               suggestionMessages: ['手动补墙生成的识别层，暂无自动质量报告。']
             },
             candidateFilters: {
               showWalls: true,
               showOpenings: true,
               showRooms: true,
+              showLowConfidence: false,
               showLowConfidenceOnly: false,
+              showMediumConfidence: true,
+              showHighConfidence: true,
+              showIssueMarkers: true,
               showDeleted: false,
               showPromoted: true
             },
+            attemptHistory: [],
             wallCount: 0,
             horizontalCount: 0,
             verticalCount: 0,
             confidence: '中' as const,
             parameters: {
               mode: 'complete' as const,
+              profile: 'wall-priority' as const,
+              passes: ['dark', 'gray-structure', 'grid-completion'] as const,
               gridSize: current.canvas.gridSize,
               minWallLength: current.canvas.gridSize * 3,
               rawWallCount: 0,
@@ -787,6 +809,14 @@ export default function DesignerCanvas({
             event.target === event.target.getStage() || targetName === 'canvas-bg' || targetName === 'floorplan-bg';
 
           if (clickedEmptyArea) {
+            const point = getPointerWorldPoint();
+
+            if (samplingWallColor && point && onWallColorSample) {
+              event.cancelBubble = true;
+              onWallColorSample(point);
+              return;
+            }
+
             handleCanvasClick();
           }
         }}
@@ -808,6 +838,9 @@ export default function DesignerCanvas({
             onDraftEnd={onDraftEnd}
             onDraftChange={onDraftChange}
           />
+          {showRecognitionCropBox && recognitionCropBox && onRecognitionCropBoxChange && (
+            <RecognitionCropBoxShape cropBox={recognitionCropBox} onChange={onRecognitionCropBoxChange} />
+          )}
           {showGrid &&
             gridLines.map((line) => (
               <Line
@@ -827,6 +860,7 @@ export default function DesignerCanvas({
               design={design}
               recognition={recognitionLayer}
               mode={mode}
+              selection={selection}
               onSelectionChange={onSelectionChange}
               onCommitChange={onCommitChange}
             />
@@ -962,12 +996,14 @@ function RecognitionLayerShape({
   design,
   recognition,
   mode,
+  selection,
   onSelectionChange,
   onCommitChange
 }: {
   design: DesignDocument;
   recognition: RecognitionSession;
   mode: ToolMode;
+  selection: Selection | null;
   onSelectionChange: (selection: Selection | null) => void;
   onCommitChange: (updater: (current: DesignDocument) => DesignDocument, selection?: Selection | null) => void;
 }) {
@@ -979,7 +1015,11 @@ function RecognitionLayerShape({
     showWalls: true,
     showOpenings: true,
     showRooms: true,
+    showLowConfidence: false,
     showLowConfidenceOnly: false,
+    showMediumConfidence: true,
+    showHighConfidence: true,
+    showIssueMarkers: true,
     showDeleted: false,
     showPromoted: true
   };
@@ -991,7 +1031,23 @@ function RecognitionLayerShape({
     if (status === 'promoted') return filters.showPromoted;
     return true;
   };
-  const passesConfidenceFilter = (confidence?: number) => !filters.showLowConfidenceOnly || (confidence ?? 1) < 0.55;
+  const passesConfidenceFilter = (confidence?: number) => {
+    const value = confidence ?? 1;
+
+    if (filters.showLowConfidenceOnly) {
+      return value < 0.55;
+    }
+
+    if (value < 0.55) {
+      return filters.showLowConfidence;
+    }
+
+    if (value < 0.72) {
+      return filters.showMediumConfidence;
+    }
+
+    return filters.showHighConfidence;
+  };
   const visibleWalls = filters.showWalls
     ? recognition.walls.filter((wall) => canShowStatus(wall.status) && passesConfidenceFilter(wall.confidence))
     : [];
@@ -1004,6 +1060,9 @@ function RecognitionLayerShape({
     ? (recognition.roomCandidates ?? []).filter(
         (candidate) => canShowStatus(candidate.status) && passesConfidenceFilter(candidate.confidence)
       )
+    : [];
+  const visibleIssueMarkers = filters.showIssueMarkers
+    ? (recognition.qualityReport?.issueMarkers ?? []).filter((marker) => marker.status === 'active')
     : [];
 
   const selectCandidate = (
@@ -1206,9 +1265,143 @@ function RecognitionLayerShape({
           </Group>
         );
       })}
+      {visibleIssueMarkers.map((marker) => {
+        const selected = selection?.type === 'recognitionIssueMarker' && selection.id === marker.id;
+        const color = marker.type === 'outer-gap' || marker.type === 'missing-wall' ? '#e06a2f' : '#d1a12f';
+
+        return (
+          <Group
+            key={marker.id}
+            x={marker.x}
+            y={marker.y}
+            listening={mode !== 'pan' && !recognition.locked}
+            onMouseDown={(event) => {
+              if (mode === 'pan' || recognition.locked) {
+                return;
+              }
+
+              event.cancelBubble = true;
+              onSelectionChange({ type: 'recognitionIssueMarker', id: marker.id });
+            }}
+          >
+            <Circle radius={selected ? 12 : 9} fill="#ffffff" stroke={color} strokeWidth={3} />
+            <Text x={-4} y={-7} text="!" fontSize={13} fontStyle="bold" fill={color} listening={false} />
+            {selected && (
+              <Text
+                x={14}
+                y={-18}
+                width={120}
+                text={marker.message}
+                fontSize={12}
+                fill="#8a3a18"
+                listening={false}
+              />
+            )}
+          </Group>
+        );
+      })}
       {mode === 'recognition-wall' && !design.recognition && (
         <Text x={24} y={24} text="点击画布补识别墙" fontSize={14} fill="#176b61" listening={false} />
       )}
+    </Group>
+  );
+}
+
+function RecognitionCropBoxShape({
+  cropBox,
+  onChange
+}: {
+  cropBox: RecognitionCropBox;
+  onChange: (cropBox: RecognitionCropBox) => void;
+}) {
+  const minSize = 80;
+  const handles = [
+    { key: 'tl', x: cropBox.x, y: cropBox.y },
+    { key: 'tr', x: cropBox.x + cropBox.width, y: cropBox.y },
+    { key: 'br', x: cropBox.x + cropBox.width, y: cropBox.y + cropBox.height },
+    { key: 'bl', x: cropBox.x, y: cropBox.y + cropBox.height }
+  ];
+
+  const updateHandle = (key: string, point: Point) => {
+    const left = cropBox.x;
+    const top = cropBox.y;
+    const right = cropBox.x + cropBox.width;
+    const bottom = cropBox.y + cropBox.height;
+    const nextLeft = key.includes('l') ? Math.min(point.x, right - minSize) : left;
+    const nextRight = key.includes('r') ? Math.max(point.x, left + minSize) : right;
+    const nextTop = key.includes('t') ? Math.min(point.y, bottom - minSize) : top;
+    const nextBottom = key.includes('b') ? Math.max(point.y, top + minSize) : bottom;
+
+    onChange({
+      x: Math.round(nextLeft),
+      y: Math.round(nextTop),
+      width: Math.round(nextRight - nextLeft),
+      height: Math.round(nextBottom - nextTop)
+    });
+  };
+
+  return (
+    <Group name="recognition-crop-box">
+      <Rect x={0} y={0} width={cropBox.x} height={10000} fill="rgba(47, 64, 80, 0.10)" listening={false} />
+      <Rect x={cropBox.x + cropBox.width} y={0} width={10000} height={10000} fill="rgba(47, 64, 80, 0.10)" listening={false} />
+      <Rect x={cropBox.x} y={0} width={cropBox.width} height={cropBox.y} fill="rgba(47, 64, 80, 0.10)" listening={false} />
+      <Rect
+        x={cropBox.x}
+        y={cropBox.y + cropBox.height}
+        width={cropBox.width}
+        height={10000}
+        fill="rgba(47, 64, 80, 0.10)"
+        listening={false}
+      />
+      <Rect
+        x={cropBox.x}
+        y={cropBox.y}
+        width={cropBox.width}
+        height={cropBox.height}
+        stroke="#2f80ed"
+        strokeWidth={2}
+        dash={[12, 7]}
+        draggable
+        onDragEnd={(event) => {
+          event.cancelBubble = true;
+          onChange({
+            ...cropBox,
+            x: Math.round(event.target.x()),
+            y: Math.round(event.target.y())
+          });
+          event.target.position({ x: cropBox.x, y: cropBox.y });
+        }}
+      />
+      {handles.map((handle) => (
+        <Rect
+          key={handle.key}
+          x={handle.x - 6}
+          y={handle.y - 6}
+          width={12}
+          height={12}
+          fill="#ffffff"
+          stroke="#2f80ed"
+          strokeWidth={2}
+          draggable
+          onDragMove={(event) => {
+            event.cancelBubble = true;
+            updateHandle(handle.key, { x: event.target.x() + 6, y: event.target.y() + 6 });
+          }}
+          onDragEnd={(event) => {
+            event.cancelBubble = true;
+            updateHandle(handle.key, { x: event.target.x() + 6, y: event.target.y() + 6 });
+          }}
+        />
+      ))}
+      <Text
+        x={cropBox.x}
+        y={cropBox.y - 24}
+        text="识别范围"
+        fill="#2f80ed"
+        fontSize={13}
+        fontStyle="bold"
+        listening={false}
+      />
     </Group>
   );
 }

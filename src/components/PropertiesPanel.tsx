@@ -22,8 +22,11 @@ import type {
   FeatureModuleStatus,
   FurnitureInstance,
   Opening,
+  RecognitionCropBox,
   RecognitionMode,
+  RecognitionProfile,
   RecognitionSession,
+  RecognitionSampledWallColor,
   RenderSettings,
   RoomLabel,
   RoomZone,
@@ -59,6 +62,16 @@ type PropertiesPanelProps = {
   onRecognizeFloorplan: () => void;
   recognitionMode: RecognitionMode;
   onRecognitionModeChange: (mode: RecognitionMode) => void;
+  recognitionProfile: RecognitionProfile;
+  onRecognitionProfileChange: (profile: RecognitionProfile) => void;
+  recognitionCropBox: RecognitionCropBox | null;
+  onRecognitionCropBoxChange: (cropBox: RecognitionCropBox) => void;
+  sampledWallColor?: RecognitionSampledWallColor;
+  samplingWallColor: boolean;
+  onStartWallColorSampling: () => void;
+  onApplyAllOuterGaps: () => void;
+  onApplySelectedIssueMarker: (id: string) => void;
+  onIgnoreSelectedIssueMarker: (id: string) => void;
   onKeepBackgroundReference: () => void;
   onSelectAllRecognitionWalls: () => void;
   onSelectAllRecognitionOpenings: () => void;
@@ -100,7 +113,8 @@ const getPreferredTab = (
     importWizardOpen ||
     selection?.type === 'recognitionWall' ||
     selection?.type === 'recognitionOpeningCandidate' ||
-    selection?.type === 'recognitionRoomCandidate'
+    selection?.type === 'recognitionRoomCandidate' ||
+    selection?.type === 'recognitionIssueMarker'
   ) {
     return 'recognition';
   }
@@ -138,6 +152,16 @@ export default function PropertiesPanel({
   onRecognizeFloorplan,
   recognitionMode,
   onRecognitionModeChange,
+  recognitionProfile,
+  onRecognitionProfileChange,
+  recognitionCropBox,
+  onRecognitionCropBoxChange,
+  sampledWallColor,
+  samplingWallColor,
+  onStartWallColorSampling,
+  onApplyAllOuterGaps,
+  onApplySelectedIssueMarker,
+  onIgnoreSelectedIssueMarker,
   onKeepBackgroundReference,
   onSelectAllRecognitionWalls,
   onSelectAllRecognitionOpenings,
@@ -224,9 +248,16 @@ export default function PropertiesPanel({
           <>
             <RecognitionModeCard
               recognitionMode={recognitionMode}
+              recognitionProfile={recognitionProfile}
               recognizingFloorplan={recognizingFloorplan}
               hasBackgroundImage={Boolean(design.backgroundImage)}
+              recognitionCropBox={recognitionCropBox}
+              sampledWallColor={sampledWallColor}
+              samplingWallColor={samplingWallColor}
               onRecognitionModeChange={onRecognitionModeChange}
+              onRecognitionProfileChange={onRecognitionProfileChange}
+              onRecognitionCropBoxChange={onRecognitionCropBoxChange}
+              onStartWallColorSampling={onStartWallColorSampling}
               onRecognizeFloorplan={onRecognizeFloorplan}
             />
             {design.backgroundImage && importWizardOpen && (
@@ -258,6 +289,10 @@ export default function PropertiesPanel({
                 onSaveAiDraft={onSaveAiRecognitionDraft}
                 onDiscard={onDiscardRecognitionLayer}
                 onRecognizeAgain={onRecognizeFloorplan}
+                selectedIssueMarkerId={selection?.type === 'recognitionIssueMarker' ? selection.id : null}
+                onApplyAllOuterGaps={onApplyAllOuterGaps}
+                onApplySelectedIssueMarker={onApplySelectedIssueMarker}
+                onIgnoreSelectedIssueMarker={onIgnoreSelectedIssueMarker}
               />
             )}
             {design.backgroundImage ? (
@@ -344,24 +379,70 @@ function CurrentPlanSummary({ design }: { design: DesignDocument }) {
 
 function RecognitionModeCard({
   recognitionMode,
+  recognitionProfile,
   recognizingFloorplan,
   hasBackgroundImage,
+  recognitionCropBox,
+  sampledWallColor,
+  samplingWallColor,
   onRecognitionModeChange,
+  onRecognitionProfileChange,
+  onRecognitionCropBoxChange,
+  onStartWallColorSampling,
   onRecognizeFloorplan
 }: {
   recognitionMode: RecognitionMode;
+  recognitionProfile: RecognitionProfile;
   recognizingFloorplan: boolean;
   hasBackgroundImage: boolean;
+  recognitionCropBox: RecognitionCropBox | null;
+  sampledWallColor?: RecognitionSampledWallColor;
+  samplingWallColor: boolean;
   onRecognitionModeChange: (mode: RecognitionMode) => void;
+  onRecognitionProfileChange: (profile: RecognitionProfile) => void;
+  onRecognitionCropBoxChange: (cropBox: RecognitionCropBox) => void;
+  onStartWallColorSampling: () => void;
   onRecognizeFloorplan: () => void;
 }) {
+  const profileOptions: Array<{ value: RecognitionProfile; label: string }> = [
+    { value: 'balanced', label: '均衡' },
+    { value: 'wall-priority', label: '墙体优先' },
+    { value: 'clean', label: '干净' }
+  ];
+
+  const updateCropValue = (key: keyof RecognitionCropBox, value: number) => {
+    if (!recognitionCropBox) {
+      return;
+    }
+
+    onRecognitionCropBoxChange({
+      ...recognitionCropBox,
+      [key]: Math.max(key === 'width' || key === 'height' ? 80 : 0, Math.round(value))
+    });
+  };
+
   return (
     <div className="property-stack recognition-mode-stack">
       <h2>
         <Wand2 size={16} />
-        识别模式
+        识别工作台
       </h2>
       <div className="draw-mode-toggle" aria-label="户型识别模式">
+        {profileOptions.map((item) => (
+          <button
+            className={recognitionProfile === item.value ? 'is-active' : ''}
+            type="button"
+            key={item.value}
+            onClick={() => {
+              onRecognitionProfileChange(item.value);
+              onRecognitionModeChange(item.value === 'clean' ? 'precise' : 'complete');
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="draw-mode-toggle" aria-label="兼容识别模式">
         <button
           className={recognitionMode === 'complete' ? 'is-active' : ''}
           type="button"
@@ -378,8 +459,37 @@ function RecognitionModeCard({
         </button>
       </div>
       <div className="editing-hint">
-        完整模式优先补全外墙、阳台和断开的墙段；精准模式更克制，适合家具线条很多的图。
+        墙体优先会保留更多外框、阳台和浅灰墙线；干净模式更适合线条噪声多的图。
       </div>
+      {recognitionCropBox && (
+        <div className="crop-field-grid">
+          {[
+            ['x', 'X'],
+            ['y', 'Y'],
+            ['width', '宽'],
+            ['height', '高']
+          ].map(([key, label]) => (
+            <label key={key}>
+              <span>{label}</span>
+              <input
+                type="number"
+                value={Math.round(recognitionCropBox[key as keyof RecognitionCropBox])}
+                onChange={(event) => updateCropValue(key as keyof RecognitionCropBox, numberValue(event.target.value))}
+              />
+            </label>
+          ))}
+        </div>
+      )}
+      <button className="secondary-button" type="button" onClick={onStartWallColorSampling} disabled={!hasBackgroundImage || recognizingFloorplan}>
+        <Wand2 size={16} />
+        {samplingWallColor ? '点击底图墙体取色' : sampledWallColor ? '重新采样墙色' : '采样墙体颜色'}
+      </button>
+      {sampledWallColor && (
+        <div className="sampled-color-preview">
+          <span style={{ background: `rgb(${sampledWallColor.r}, ${sampledWallColor.g}, ${sampledWallColor.b})` }} />
+          <small>RGB({sampledWallColor.r}, {sampledWallColor.g}, {sampledWallColor.b}) · 容差 {sampledWallColor.tolerance}</small>
+        </div>
+      )}
       <button className="primary-button" type="button" onClick={onRecognizeFloorplan} disabled={!hasBackgroundImage || recognizingFloorplan}>
         <Wand2 size={16} />
         {recognizingFloorplan ? '正在识别' : '按当前模式重新识别'}
@@ -435,7 +545,11 @@ function RecognitionLayerEditor({
   onPromoteAllRooms,
   onSaveAiDraft,
   onDiscard,
-  onRecognizeAgain
+  onRecognizeAgain,
+  selectedIssueMarkerId,
+  onApplyAllOuterGaps,
+  onApplySelectedIssueMarker,
+  onIgnoreSelectedIssueMarker
 }: {
   recognitionLayer: RecognitionSession;
   recognizingFloorplan: boolean;
@@ -457,6 +571,10 @@ function RecognitionLayerEditor({
   onSaveAiDraft: () => void;
   onDiscard: () => void;
   onRecognizeAgain: () => void;
+  selectedIssueMarkerId: string | null;
+  onApplyAllOuterGaps: () => void;
+  onApplySelectedIssueMarker: (id: string) => void;
+  onIgnoreSelectedIssueMarker: (id: string) => void;
 }) {
   const activeCount = recognitionLayer.walls.filter((wall) => wall.status === 'active').length;
   const activeOpeningCount = (recognitionLayer.openingCandidates ?? []).filter((candidate) => candidate.status === 'active').length;
@@ -474,16 +592,30 @@ function RecognitionLayerEditor({
   const selectedRoomCount = recognitionLayer.selectedRoomCandidateIds?.length ?? 0;
   const selectedCount = selectedWallCount + selectedOpeningCount + selectedRoomCount;
   const inferredCount = recognitionLayer.walls.filter((wall) => wall.source === 'inferred').length;
-  const modeLabel = recognitionLayer.parameters.mode === 'complete' ? '完整模式' : '精准模式';
+  const profileLabels: Record<RecognitionProfile, string> = {
+    balanced: '均衡',
+    'wall-priority': '墙体优先',
+    clean: '干净'
+  };
+  const modeLabel = `${profileLabels[recognitionLayer.parameters.profile ?? 'wall-priority']} · ${recognitionLayer.parameters.mode === 'complete' ? '完整' : '精准'}`;
   const filters = recognitionLayer.candidateFilters ?? {
     showWalls: true,
     showOpenings: true,
     showRooms: true,
+    showLowConfidence: false,
     showLowConfidenceOnly: false,
+    showMediumConfidence: true,
+    showHighConfidence: true,
+    showIssueMarkers: true,
     showDeleted: false,
     showPromoted: true
   };
   const qualityReport = recognitionLayer.qualityReport;
+  const selectedIssueMarker = selectedIssueMarkerId
+    ? qualityReport?.issueMarkers.find((marker) => marker.id === selectedIssueMarkerId) ?? null
+    : null;
+  const activeOuterGapCount = qualityReport?.outerGapMarkers.filter((marker) => marker.status === 'active').length ?? 0;
+  const [currentAttempt, previousAttempt] = recognitionLayer.attemptHistory ?? [];
 
   const updateFilter = (key: keyof typeof filters, value: boolean) => {
     onChange((current) => ({
@@ -512,9 +644,22 @@ function RecognitionLayerEditor({
         <span>已选 {selectedCount} 个 / 已写入 {promotedCount} 个 / 已删除 {deletedCount} 个</span>
         <span>补全 {recognitionLayer.parameters.inferredWallCount || inferredCount} 面 / 置信度：{recognitionLayer.confidence}</span>
       </div>
+      <div className="property-button-row">
+        <button className="secondary-button" type="button" onClick={onRecognizeAgain} disabled={recognizingFloorplan}>
+          <Wand2 size={16} />
+          {recognizingFloorplan ? '正在识别' : '重新识别'}
+        </button>
+        <button className="secondary-button" type="button" onClick={onApplyAllOuterGaps} disabled={activeOuterGapCount === 0}>
+          补全建议
+        </button>
+      </div>
+      <button className="primary-button" type="button" onClick={onPromoteAll} disabled={activeCount === 0}>
+        写入正式方案
+      </button>
       {qualityReport && (
         <div className="recognition-quality">
           <strong>识别质量</strong>
+          <span>质量分：{qualityReport.qualityScore} / 100 · 疑似漏墙：{qualityReport.missingWallHintCount} 个</span>
           <span>外框覆盖：{Math.round(qualityReport.outerFrameCoverage * 100)}%</span>
           <span>断点：{qualityReport.disconnectedEndpointCount} 个 · 低置信：{qualityReport.lowConfidenceCount} 个</span>
           <span>疑似家具线：{qualityReport.possibleFurnitureNoiseCount} 条</span>
@@ -522,6 +667,35 @@ function RecognitionLayerEditor({
             {qualityReport.suggestionMessages.map((message) => (
               <span key={message}>{message}</span>
             ))}
+          </div>
+        </div>
+      )}
+      {currentAttempt && previousAttempt && (
+        <div className="recognition-quality">
+          <strong>对比上次识别</strong>
+          <span>墙体：{currentAttempt.wallCount} / 上次 {previousAttempt.wallCount}</span>
+          <span>外框覆盖：{Math.round(currentAttempt.outerFrameCoverage * 100)}% / 上次 {Math.round(previousAttempt.outerFrameCoverage * 100)}%</span>
+          <span>断点：{currentAttempt.disconnectedEndpointCount} / 上次 {previousAttempt.disconnectedEndpointCount}</span>
+          <span>质量分：{currentAttempt.qualityScore} / 上次 {previousAttempt.qualityScore}</span>
+        </div>
+      )}
+      {selectedIssueMarker && (
+        <div className="recognition-quality">
+          <strong>识别提示</strong>
+          <span>{selectedIssueMarker.message}</span>
+          <span>{selectedIssueMarker.suggestion === 'create-wall' ? '建议生成补墙候选。' : '建议人工检查后决定是否补墙。'}</span>
+          <div className="property-button-row">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => onApplySelectedIssueMarker(selectedIssueMarker.id)}
+              disabled={!selectedIssueMarker.proposedWall}
+            >
+              生成补墙
+            </button>
+            <button className="secondary-button" type="button" onClick={() => onIgnoreSelectedIssueMarker(selectedIssueMarker.id)}>
+              忽略
+            </button>
           </div>
         </div>
       )}
@@ -544,7 +718,11 @@ function RecognitionLayerEditor({
           { key: 'showWalls', label: '墙体' },
           { key: 'showOpenings', label: '门窗' },
           { key: 'showRooms', label: '房间' },
-          { key: 'showLowConfidenceOnly', label: '低置信' },
+          { key: 'showLowConfidence', label: '低置信' },
+          { key: 'showLowConfidenceOnly', label: '仅低置信' },
+          { key: 'showMediumConfidence', label: '中置信' },
+          { key: 'showHighConfidence', label: '高置信' },
+          { key: 'showIssueMarkers', label: '提示' },
           { key: 'showDeleted', label: '已删除' },
           { key: 'showPromoted', label: '已写入' }
         ].map((item) => (
@@ -648,10 +826,6 @@ function RecognitionLayerEditor({
       <button className="secondary-button" type="button" onClick={onSaveAiDraft}>
         <Wand2 size={16} />
         保存 AI 识别草稿
-      </button>
-      <button className="secondary-button" type="button" onClick={onRecognizeAgain} disabled={recognizingFloorplan}>
-        <Wand2 size={16} />
-        {recognizingFloorplan ? '正在识别' : '重新识别'}
       </button>
       <button className="danger-button" type="button" onClick={onDiscard}>
         <X size={16} />

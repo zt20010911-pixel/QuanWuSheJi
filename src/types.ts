@@ -18,13 +18,14 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 10;
+export const DESIGN_DOCUMENT_VERSION = 11;
 
 export type Selection =
   | { type: 'wall'; id: string }
   | { type: 'recognitionWall'; id: string }
   | { type: 'recognitionOpeningCandidate'; id: string }
   | { type: 'recognitionRoomCandidate'; id: string }
+  | { type: 'recognitionIssueMarker'; id: string }
   | { type: 'opening'; id: string }
   | { type: 'furniture'; id: string }
   | { type: 'furnitureGroup'; id: string }
@@ -251,6 +252,54 @@ export type RecognitionStatus = 'draft' | 'confirmed';
 
 export type RecognitionMode = 'complete' | 'precise';
 
+export type RecognitionProfile = 'balanced' | 'wall-priority' | 'clean';
+
+export type RecognitionPass = 'dark' | 'gray-structure' | 'sampled-color' | 'grid-completion';
+
+export type RecognitionCropBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type RecognitionSampledWallColor = {
+  r: number;
+  g: number;
+  b: number;
+  tolerance: number;
+};
+
+export type RecognitionIssueMarkerType = 'endpoint' | 'missing-wall' | 'outer-gap' | 'furniture-noise';
+
+export type RecognitionIssueMarkerStatus = 'active' | 'ignored' | 'resolved';
+
+export type RecognitionIssueMarker = {
+  id: string;
+  type: RecognitionIssueMarkerType;
+  x: number;
+  y: number;
+  message: string;
+  suggestion: 'create-wall' | 'inspect' | 'ignore';
+  status: RecognitionIssueMarkerStatus;
+  relatedWallIds?: string[];
+  proposedWall?: Wall;
+};
+
+export type RecognitionAttemptSnapshot = {
+  id: string;
+  createdAt: string;
+  profile: RecognitionProfile;
+  mode: RecognitionMode;
+  wallCount: number;
+  openingCandidateCount: number;
+  roomCandidateCount: number;
+  outerFrameCoverage: number;
+  disconnectedEndpointCount: number;
+  missingWallHintCount: number;
+  qualityScore: number;
+};
+
 export type RecognitionCandidateStatus = 'active' | 'deleted' | 'promoted';
 
 export type RecognitionCandidateSource = 'scan' | 'gap' | 'graph' | 'inferred' | 'manual' | 'ai-draft';
@@ -300,6 +349,10 @@ export type RecognitionQualityReport = {
   disconnectedEndpointCount: number;
   lowConfidenceCount: number;
   possibleFurnitureNoiseCount: number;
+  missingWallHintCount: number;
+  outerGapMarkers: RecognitionIssueMarker[];
+  issueMarkers: RecognitionIssueMarker[];
+  qualityScore: number;
   suggestionMessages: string[];
 };
 
@@ -307,7 +360,11 @@ export type RecognitionCandidateFilters = {
   showWalls: boolean;
   showOpenings: boolean;
   showRooms: boolean;
+  showLowConfidence: boolean;
   showLowConfidenceOnly: boolean;
+  showMediumConfidence: boolean;
+  showHighConfidence: boolean;
+  showIssueMarkers: boolean;
   showDeleted: boolean;
   showPromoted: boolean;
 };
@@ -343,12 +400,17 @@ export type RecognitionSession = {
   qualityReport?: RecognitionQualityReport;
   candidateFilters?: RecognitionCandidateFilters;
   aiRecognitionDraft?: AiRecognitionDraft;
+  attemptHistory?: RecognitionAttemptSnapshot[];
   wallCount: number;
   horizontalCount: number;
   verticalCount: number;
   confidence: '低' | '中' | '高';
   parameters: {
     mode: RecognitionMode;
+    profile: RecognitionProfile;
+    cropBox?: RecognitionCropBox;
+    sampledWallColor?: RecognitionSampledWallColor;
+    passes: RecognitionPass[];
     gridSize: number;
     minWallLength: number;
     rawWallCount: number;

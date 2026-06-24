@@ -35,7 +35,11 @@ export const DEFAULT_RECOGNITION_CANDIDATE_FILTERS: RecognitionCandidateFilters 
   showWalls: true,
   showOpenings: true,
   showRooms: true,
+  showLowConfidence: false,
   showLowConfidenceOnly: false,
+  showMediumConfidence: true,
+  showHighConfidence: true,
+  showIssueMarkers: true,
   showDeleted: false,
   showPromoted: true
 };
@@ -65,6 +69,10 @@ const DEFAULT_RECOGNITION_QUALITY_REPORT: RecognitionQualityReport = {
   disconnectedEndpointCount: 0,
   lowConfidenceCount: 0,
   possibleFurnitureNoiseCount: 0,
+  missingWallHintCount: 0,
+  outerGapMarkers: [],
+  issueMarkers: [],
+  qualityScore: 0,
   suggestionMessages: ['暂无质量报告，请重新识别户型图。']
 };
 
@@ -224,10 +232,15 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
           ...(design.recognition.candidateFilters ?? {})
         },
         aiRecognitionDraft: design.recognition.aiRecognitionDraft,
+        attemptHistory: design.recognition.attemptHistory ?? [],
         wallCount: design.recognition.walls.map(normalizeRecognitionWall).filter((wall) => wall.status !== 'deleted').length,
         confidence: design.recognition.confidence ?? '中',
         parameters: {
           mode: design.recognition.parameters?.mode ?? 'complete',
+          profile: design.recognition.parameters?.profile ?? 'wall-priority',
+          cropBox: design.recognition.parameters?.cropBox,
+          sampledWallColor: design.recognition.parameters?.sampledWallColor,
+          passes: design.recognition.parameters?.passes ?? ['dark', 'gray-structure', 'grid-completion'],
           gridSize: design.recognition.parameters?.gridSize ?? design.canvas.gridSize,
           minWallLength: design.recognition.parameters?.minWallLength ?? design.canvas.gridSize * 3,
           rawWallCount: design.recognition.parameters?.rawWallCount ?? design.recognition.walls.length,
