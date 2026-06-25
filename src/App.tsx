@@ -13,6 +13,7 @@ import { DEFAULT_MATERIAL_BRUSH, resolveFurnitureMaterial } from './data/furnitu
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS } from './data/materials';
 import type {
   BackgroundImage,
+  CameraViewpoint,
   DesignDocument,
   DesignTemplate,
   FurnitureComboDefinition,
@@ -30,11 +31,13 @@ import type {
   RecognitionSampledWallColor,
   RecognitionSession,
   RecognitionWall,
+  RecognitionWorkspaceState,
   Selection,
   ToolMode,
   ViewMode,
   Wall,
-  WallDrawMode
+  WallDrawMode,
+  WalkthroughPath
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
 import { createDeliveryHtml, createDxfDraft, createModelDraft, createPlanSvg } from './utils/designExport';
@@ -42,6 +45,7 @@ import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId, snapPoint } from './utils/geometry';
 import {
   DEFAULT_RECOGNITION_CANDIDATE_FILTERS,
+  DEFAULT_RECOGNITION_WORKSPACE_STATE,
   normalizeDesign,
   normalizeFurnitureInstance,
   normalizeRecognitionWall
@@ -267,6 +271,14 @@ const createRecognitionSession = (
     roomCandidates,
     qualityReport: result.qualityReport,
     candidateFilters: { ...DEFAULT_RECOGNITION_CANDIDATE_FILTERS },
+    workspace: {
+      ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+      ...(previousRecognition?.workspace ?? {}),
+      step: 'review',
+      activeTool: 'select-candidate',
+      showLowConfidence: false,
+      showIssueMarkers: true
+    },
     attemptHistory: [attemptSnapshot, ...(previousRecognition?.attemptHistory ?? [])].slice(0, 2),
     wallCount,
     horizontalCount: result.horizontalCount,
@@ -384,6 +396,7 @@ export default function App() {
   const [recognitionMode, setRecognitionMode] = useState<RecognitionMode>('complete');
   const [recognitionProfile, setRecognitionProfile] = useState<RecognitionProfile>('wall-priority');
   const [recognitionCropBox, setRecognitionCropBox] = useState<RecognitionCropBox | null>(null);
+  const [recognitionWorkspace, setRecognitionWorkspace] = useState<RecognitionWorkspaceState>(DEFAULT_RECOGNITION_WORKSPACE_STATE);
   const [sampledWallColor, setSampledWallColor] = useState<RecognitionSampledWallColor | undefined>();
   const [samplingWallColor, setSamplingWallColor] = useState(false);
   const [importWizardOpen, setImportWizardOpen] = useState(false);
@@ -484,6 +497,38 @@ export default function App() {
     },
     []
   );
+
+  const updateRecognitionWorkspace = useCallback(
+    (patch: Partial<RecognitionWorkspaceState>) => {
+      setRecognitionWorkspace((current) => ({ ...current, ...patch }));
+
+      if (design.recognition) {
+        commitChange((current) => ({
+          ...current,
+          recognition: current.recognition
+            ? {
+                ...current.recognition,
+                workspace: {
+                  ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+                  ...(current.recognition.workspace ?? {}),
+                  ...patch
+                }
+              }
+            : current.recognition
+        }));
+      }
+    },
+    [commitChange, design.recognition]
+  );
+
+  useEffect(() => {
+    if (design.recognition?.workspace) {
+      setRecognitionWorkspace({
+        ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+        ...design.recognition.workspace
+      });
+    }
+  }, [design.recognition?.id, design.recognition?.workspace]);
 
   const beginDraft = useCallback(() => {
     if (!draftBaseRef.current) {
@@ -1087,6 +1132,33 @@ export default function App() {
     setStatusText('已导出 3D 效果图');
   };
 
+  const captureThreeDViewpoint = (name: string): CameraViewpoint | null => {
+    if (viewMode !== 'threeD') {
+      setStatusText('请先切换到 3D 视图再保存机位');
+      return null;
+    }
+
+    const viewpoint = threeViewerRef.current?.getCameraViewpoint(name) ?? null;
+
+    if (!viewpoint) {
+      setStatusText('3D 视图还未准备好，请稍后再试');
+      return null;
+    }
+
+    setStatusText(`已保存机位：${viewpoint.name}`);
+    return viewpoint;
+  };
+
+  const previewWalkthroughPath = (path: WalkthroughPath) => {
+    if (viewMode !== 'threeD') {
+      setStatusText('请先切换到 3D 视图再预览漫游');
+      return;
+    }
+
+    threeViewerRef.current?.previewWalkthrough(path);
+    setStatusText(`正在预览漫游路径：${path.name}`);
+  };
+
   const toggleFurnitureFavorite = (id: string) => {
     commitChange((current) => {
       const favoriteIds = new Set(current.favoriteFurnitureIds ?? []);
@@ -1234,6 +1306,12 @@ export default function App() {
     setRecognitionProfile('wall-priority');
     setRecognitionMode('complete');
     setRecognitionCropBox(cropBox);
+    setRecognitionWorkspace({
+      step: 'range',
+      activeTool: 'crop',
+      showLowConfidence: false,
+      showIssueMarkers: true
+    });
     setSampledWallColor(undefined);
     setSamplingWallColor(false);
     commitChange((current) => ({ ...current, backgroundImage, recognition: undefined }), null);
@@ -1261,16 +1339,17 @@ export default function App() {
     setStatusText('请在户型图上点选两点进行比例标定');
   };
 
-  const recognizeFloorplan = async () => {
+  const recognizeFloorplanWithCropBox = async (cropBoxOverride?: RecognitionCropBox) => {
     if (!design.backgroundImage || recognizingFloorplan) {
       return;
     }
 
     setRecognizingFloorplan(true);
     setStatusText('正在识别到独立图层');
+    setRecognitionWorkspace((current) => ({ ...current, step: 'recognize', activeTool: 'select-candidate' }));
 
     try {
-      const cropBox = recognitionCropBox ?? design.recognition?.parameters.cropBox ?? createDefaultRecognitionCropBox(design.backgroundImage);
+      const cropBox = cropBoxOverride ?? recognitionCropBox ?? design.recognition?.parameters.cropBox ?? createDefaultRecognitionCropBox(design.backgroundImage);
       const mode = recognitionProfile === 'clean' ? 'precise' : recognitionMode;
       const sampledColor = sampledWallColor ?? design.recognition?.parameters.sampledWallColor;
       const result = await recognizeFloorplanWalls(design.backgroundImage, {
@@ -1284,10 +1363,12 @@ export default function App() {
 
       if (result.walls.length === 0) {
         setStatusText('未识别到足够清晰的墙体，请调高底图清晰度后重试');
+        setRecognitionWorkspace((current) => ({ ...current, step: 'range', activeTool: 'crop' }));
         return;
       }
 
       const recognition = createRecognitionSession(result, design.backgroundImage, design.canvas.gridSize, design.recognition);
+      setRecognitionWorkspace(recognition.workspace ?? DEFAULT_RECOGNITION_WORKSPACE_STATE);
 
       commitChange(
         (current) => ({
@@ -1313,9 +1394,47 @@ export default function App() {
       );
     } catch {
       setStatusText('自动识别失败，请换更清晰的户型图后重试');
+      setRecognitionWorkspace((current) => ({ ...current, step: 'range', activeTool: 'crop' }));
     } finally {
       setRecognizingFloorplan(false);
     }
+  };
+
+  const recognizeFloorplan = () => {
+    void recognizeFloorplanWithCropBox();
+  };
+
+  const recognizeSelectedArea = () => {
+    if (!design.backgroundImage || !design.recognition) {
+      setStatusText('请先上传户型图并完成一次识别');
+      return;
+    }
+
+    const selectedIds = new Set(design.recognition.selectedWallIds);
+    const selectedWalls = design.recognition.walls.filter((wall) => selectedIds.has(wall.id));
+
+    if (selectedWalls.length === 0) {
+      setStatusText('请先选择需要重新识别的候选墙区域');
+      return;
+    }
+
+    const padding = Math.max(design.canvas.gridSize * 6, 120);
+    const xValues = selectedWalls.flatMap((wall) => [wall.start.x, wall.end.x]);
+    const yValues = selectedWalls.flatMap((wall) => [wall.start.y, wall.end.y]);
+    const left = Math.max(design.backgroundImage.x, Math.min(...xValues) - padding);
+    const top = Math.max(design.backgroundImage.y, Math.min(...yValues) - padding);
+    const right = Math.min(design.backgroundImage.x + design.backgroundImage.width, Math.max(...xValues) + padding);
+    const bottom = Math.min(design.backgroundImage.y + design.backgroundImage.height, Math.max(...yValues) + padding);
+    const cropBox = {
+      x: Math.round(left),
+      y: Math.round(top),
+      width: Math.round(Math.max(design.canvas.gridSize * 4, right - left)),
+      height: Math.round(Math.max(design.canvas.gridSize * 4, bottom - top))
+    };
+
+    setRecognitionCropBox(cropBox);
+    setRecognitionWorkspace({ step: 'recognize', activeTool: 'select-candidate', showLowConfidence: false, showIssueMarkers: true });
+    void recognizeFloorplanWithCropBox(cropBox);
   };
 
   const keepBackgroundAsReference = () => {
@@ -1333,6 +1452,7 @@ export default function App() {
     }
 
     setSamplingWallColor(true);
+    updateRecognitionWorkspace({ step: 'range', activeTool: 'sample-color' });
     setMode('select');
     setViewMode('plan');
     setStatusText('请在底图真实墙体上点击一次完成采样');
@@ -1352,11 +1472,13 @@ export default function App() {
 
     setSampledWallColor(sampled);
     setSamplingWallColor(false);
+    updateRecognitionWorkspace({ step: 'recognize', activeTool: 'select-candidate' });
     setStatusText(`已采样墙体颜色 RGB(${sampled.r}, ${sampled.g}, ${sampled.b})`);
   };
 
   const updateRecognitionCropBox = (cropBox: RecognitionCropBox) => {
     setRecognitionCropBox(cropBox);
+    setRecognitionWorkspace((current) => ({ ...current, step: 'range', activeTool: 'crop' }));
     commitChange((current) => ({
       ...current,
       recognition: current.recognition
@@ -1399,6 +1521,12 @@ export default function App() {
 
         return {
           ...recognition,
+          workspace: {
+            ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+            ...(recognition.workspace ?? {}),
+            step: 'review',
+            activeTool: 'add-gap-wall'
+          },
           selectedWallIds: [wall.id],
           walls: [...recognition.walls, wall],
           qualityReport: recognition.qualityReport
@@ -1432,6 +1560,12 @@ export default function App() {
 
         return {
           ...recognition,
+          workspace: {
+            ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+            ...(recognition.workspace ?? {}),
+            step: 'review',
+            activeTool: 'add-gap-wall'
+          },
           selectedWallIds: walls.map((wall) => wall.id),
           walls: [...recognition.walls, ...walls],
           qualityReport: recognition.qualityReport
@@ -1659,6 +1793,12 @@ export default function App() {
       const recognition = withRecognitionCounts({
         ...current.recognition,
         status: 'confirmed',
+        workspace: {
+          ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+          ...(current.recognition.workspace ?? {}),
+          step: 'promote',
+          activeTool: 'select-candidate'
+        },
         selectedWallIds: [],
         walls: current.recognition.walls.map((wall) =>
           promotedMap.has(wall.id)
@@ -1729,6 +1869,12 @@ export default function App() {
       const recognition = withRecognitionCounts({
         ...current.recognition,
         status: 'confirmed',
+        workspace: {
+          ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+          ...(current.recognition.workspace ?? {}),
+          step: 'promote',
+          activeTool: 'select-candidate'
+        },
         selectedOpeningCandidateIds: [],
         openingCandidates: (current.recognition.openingCandidates ?? []).map((candidate) =>
           promotedMap.has(candidate.id)
@@ -1792,6 +1938,12 @@ export default function App() {
       const recognition = withRecognitionCounts({
         ...current.recognition,
         status: 'confirmed',
+        workspace: {
+          ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+          ...(current.recognition.workspace ?? {}),
+          step: 'promote',
+          activeTool: 'select-candidate'
+        },
         selectedRoomCandidateIds: [],
         roomCandidates: (current.recognition.roomCandidates ?? []).map((candidate) =>
           promotedMap.has(candidate.id)
@@ -1843,6 +1995,28 @@ export default function App() {
   };
 
   const wallModeLabel = wallDrawMode === 'continuous' ? '连续' : '单段';
+  const toolGuidance =
+    viewMode === 'threeD'
+      ? { title: '3D 预览', detail: '拖动画面旋转视角，滚轮缩放。右侧可调整灯光、材质和导出倍率。' }
+      : samplingWallColor
+        ? { title: '采样墙体颜色', detail: '在底图真实墙体上点击一次，系统会用该颜色补充识别浅灰墙线。' }
+        : recognitionWorkspace.step === 'range' && design.backgroundImage
+          ? { title: '设置识别范围', detail: '拖动蓝色范围框，只框住主体户型，尽量排除尺寸标注、指南针和空白区域。' }
+          : mode === 'wall'
+            ? { title: `绘制墙体 · ${wallModeLabel}`, detail: '点击两点生成墙体。Esc 取消当前起点，Enter 结束连续绘制。' }
+            : mode === 'recognition-wall'
+              ? { title: `补识别墙 · ${wallModeLabel}`, detail: '手动画出的墙会进入识别图层，确认后再写入正式方案。' }
+              : mode === 'door' || mode === 'window'
+                ? { title: mode === 'door' ? '放置门' : '放置窗', detail: '点击靠近墙体的位置放置，系统会自动吸附到最近墙体。' }
+                : mode === 'room-zone'
+                  ? { title: '绘制房间区域', detail: '依次点击房间边界点，回到起点附近即可闭合并计算面积。' }
+                  : mode === 'material-brush'
+                    ? { title: '材质刷', detail: '点击家具或房间区域应用右侧选择的材质。' }
+                    : mode === 'pan'
+                      ? { title: '平移画布', detail: '拖动画布查看户型，切回选择后可编辑对象。' }
+                      : recognitionLayer
+                        ? { title: '修正识别图层', detail: '点击绿色候选墙、门窗或房间进行选择，可删除、补全、合并或写入正式方案。' }
+                        : { title: '编辑模式', detail: '选择对象查看属性；也可以从左侧点击或拖拽家具到画布。' };
   const modeText =
     viewMode === 'threeD'
       ? '3D预览'
@@ -1945,6 +2119,10 @@ export default function App() {
           onToggleFurnitureComboFavorite={toggleFurnitureComboFavorite}
         />
         <div className="center-pane">
+          <div className="canvas-tool-hint">
+            <strong>{toolGuidance.title}</strong>
+            <span>{toolGuidance.detail}</span>
+          </div>
           <button
             className="sidebar-toggle left-sidebar-toggle"
             type="button"
@@ -2031,12 +2209,15 @@ export default function App() {
           onExportObjDraft={() => exportModelDraft('obj')}
           onStartCalibration={startCalibration}
           onRecognizeFloorplan={recognizeFloorplan}
+          onRecognizeSelectedArea={recognizeSelectedArea}
           recognitionMode={recognitionMode}
           onRecognitionModeChange={setRecognitionMode}
           recognitionProfile={recognitionProfile}
           onRecognitionProfileChange={setRecognitionProfile}
           recognitionCropBox={recognitionCropBox ?? design.recognition?.parameters.cropBox ?? (design.backgroundImage ? createDefaultRecognitionCropBox(design.backgroundImage) : null)}
+          recognitionWorkspace={recognitionWorkspace}
           onRecognitionCropBoxChange={updateRecognitionCropBox}
+          onRecognitionWorkspaceChange={updateRecognitionWorkspace}
           sampledWallColor={sampledWallColor ?? design.recognition?.parameters.sampledWallColor}
           samplingWallColor={samplingWallColor}
           onStartWallColorSampling={startWallColorSampling}
@@ -2063,6 +2244,9 @@ export default function App() {
           recognizingFloorplan={recognizingFloorplan}
           importWizardOpen={importWizardOpen}
           recognitionLayer={recognitionLayer}
+          canCaptureThreeDViewpoint={viewMode === 'threeD'}
+          onCaptureThreeDViewpoint={captureThreeDViewpoint}
+          onPreviewWalkthrough={previewWalkthroughPath}
         />
       </div>
     </div>

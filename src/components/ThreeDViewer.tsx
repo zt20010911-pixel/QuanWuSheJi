@@ -1,12 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { DesignDocument, RenderSettings } from '../types';
+import type { CameraViewpoint, DesignDocument, RenderSettings, ThreeVector, WalkthroughPath } from '../types';
 import { DEFAULT_RENDER_SETTINGS } from '../utils/designMigration';
 import { buildThreeDesignScene, disposeThreeObject, RENDER_ENVIRONMENT_PRESETS } from '../utils/threeScene';
 
 export type ThreeDViewerHandle = {
   exportPng: () => void;
+  getCameraViewpoint: (name: string) => CameraViewpoint | null;
+  previewWalkthrough: (path: WalkthroughPath) => void;
 };
 
 type ThreeDViewerProps = {
@@ -23,6 +25,12 @@ const downloadDataUrl = (dataUrl: string, fileName: string) => {
 const resolveRenderSettings = (design: DesignDocument): RenderSettings => ({
   ...DEFAULT_RENDER_SETTINGS,
   ...design.renderSettings
+});
+
+const toPlainVector = (vector: THREE.Vector3): ThreeVector => ({
+  x: Number(vector.x.toFixed(4)),
+  y: Number(vector.y.toFixed(4)),
+  z: Number(vector.z.toFixed(4))
 });
 
 const applyEnvironment = (
@@ -63,22 +71,33 @@ const applyCameraPreset = (
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   span: number,
-  cameraPreset: RenderSettings['cameraPreset']
+  settings: RenderSettings
 ) => {
-  if (cameraPreset === 'front') {
+  const activeViewpoint = settings.cameraViewpoints.find((viewpoint) => viewpoint.id === settings.activeViewpointId);
+
+  if (activeViewpoint) {
+    camera.position.set(activeViewpoint.position.x, activeViewpoint.position.y, activeViewpoint.position.z);
+    camera.fov = activeViewpoint.fov;
+    controls.target.set(activeViewpoint.target.x, activeViewpoint.target.y, activeViewpoint.target.z);
+  } else if (settings.cameraPreset === 'front') {
     camera.position.set(0, span * 0.5, span * 1.36);
+    camera.fov = 45;
     controls.target.set(0, 0.95, 0);
-  } else if (cameraPreset === 'corner') {
+  } else if (settings.cameraPreset === 'corner') {
     camera.position.set(span * 0.95, span * 0.62, span * 0.95);
+    camera.fov = 45;
     controls.target.set(0, 0.95, 0);
-  } else if (cameraPreset === 'top') {
+  } else if (settings.cameraPreset === 'top') {
     camera.position.set(0, span * 1.42, 0.001);
+    camera.fov = 42;
     controls.target.set(0, 0, 0);
-  } else if (cameraPreset === 'walkthrough') {
+  } else if (settings.cameraPreset === 'walkthrough') {
     camera.position.set(span * 0.12, 1.65, span * 0.42);
+    camera.fov = 58;
     controls.target.set(0, 1.25, 0);
   } else {
     camera.position.set(span * 0.7, span * 0.68, span * 1.05);
+    camera.fov = 45;
     controls.target.set(0, 0.9, 0);
   }
 
@@ -90,10 +109,19 @@ const applyCameraPreset = (
   controls.update();
 };
 
-const applyShadowCamera = (sunLight: THREE.DirectionalLight, span: number) => {
+const shadowMapSizeByQuality: Record<RenderSettings['shadowQuality'], number> = {
+  low: 1024,
+  medium: 2048,
+  high: 4096
+};
+
+const applyShadowCamera = (sunLight: THREE.DirectionalLight, span: number, settings: RenderSettings) => {
   const shadowCamera = sunLight.shadow.camera as THREE.OrthographicCamera;
   const half = Math.max(span * 0.95, 6);
+  const mapSize = shadowMapSizeByQuality[settings.shadowQuality];
 
+  sunLight.shadow.mapSize.set(mapSize, mapSize);
+  sunLight.shadow.needsUpdate = true;
   shadowCamera.left = -half;
   shadowCamera.right = half;
   shadowCamera.top = half;
@@ -112,6 +140,29 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
   const designGroupRef = useRef<THREE.Group | null>(null);
   const ambientLightRef = useRef<THREE.HemisphereLight | null>(null);
   const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
+  const walkthroughFrameRef = useRef<number | null>(null);
+
+  const cancelWalkthrough = () => {
+    if (walkthroughFrameRef.current !== null) {
+      window.cancelAnimationFrame(walkthroughFrameRef.current);
+      walkthroughFrameRef.current = null;
+    }
+  };
+
+  const applyWalkthroughKeyframe = (keyframe: WalkthroughPath['keyframes'][number]) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+
+    if (!camera || !controls) {
+      return;
+    }
+
+    camera.position.set(keyframe.position.x, keyframe.position.y, keyframe.position.z);
+    camera.fov = keyframe.fov;
+    camera.updateProjectionMatrix();
+    controls.target.set(keyframe.target.x, keyframe.target.y, keyframe.target.z);
+    controls.update();
+  };
 
   useImperativeHandle(
     ref,
@@ -136,6 +187,77 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
         renderer.setPixelRatio(originalPixelRatio);
         renderer.setSize(size.x, size.y, false);
         renderer.render(scene, camera);
+      },
+      getCameraViewpoint: (name: string) => {
+        const camera = cameraRef.current;
+        const controls = controlsRef.current;
+
+        if (!camera || !controls) {
+          return null;
+        }
+
+        return {
+          id: `camera-${Date.now().toString(36)}`,
+          name,
+          position: toPlainVector(camera.position),
+          target: toPlainVector(controls.target),
+          fov: Number(camera.fov.toFixed(2)),
+          createdAt: new Date().toISOString()
+        };
+      },
+      previewWalkthrough: (path: WalkthroughPath) => {
+        const camera = cameraRef.current;
+        const controls = controlsRef.current;
+        const keyframes = path.keyframes;
+
+        if (!camera || !controls || keyframes.length === 0) {
+          return;
+        }
+
+        cancelWalkthrough();
+        applyWalkthroughKeyframe(keyframes[0]);
+
+        if (keyframes.length === 1) {
+          return;
+        }
+
+        let segmentIndex = 0;
+        let segmentStartedAt = performance.now();
+
+        const animateSegment = (time: number) => {
+          const from = keyframes[segmentIndex];
+          const to = keyframes[segmentIndex + 1];
+          const durationMs = Math.max(to.durationSeconds, 0.8) * 1000;
+          const progress = Math.min((time - segmentStartedAt) / durationMs, 1);
+
+          camera.position.lerpVectors(
+            new THREE.Vector3(from.position.x, from.position.y, from.position.z),
+            new THREE.Vector3(to.position.x, to.position.y, to.position.z),
+            progress
+          );
+          controls.target.lerpVectors(
+            new THREE.Vector3(from.target.x, from.target.y, from.target.z),
+            new THREE.Vector3(to.target.x, to.target.y, to.target.z),
+            progress
+          );
+          camera.fov = THREE.MathUtils.lerp(from.fov, to.fov, progress);
+          camera.updateProjectionMatrix();
+          controls.update();
+
+          if (progress >= 1) {
+            segmentIndex += 1;
+            segmentStartedAt = time;
+          }
+
+          if (segmentIndex < keyframes.length - 1) {
+            walkthroughFrameRef.current = window.requestAnimationFrame(animateSegment);
+          } else {
+            walkthroughFrameRef.current = null;
+            applyWalkthroughKeyframe(keyframes[keyframes.length - 1]);
+          }
+        };
+
+        walkthroughFrameRef.current = window.requestAnimationFrame(animateSegment);
       }
     }),
     [design]
@@ -162,7 +284,7 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.04;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.className = 'three-canvas';
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
@@ -208,6 +330,7 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
 
     return () => {
       window.cancelAnimationFrame(animationFrame);
+      cancelWalkthrough();
       observer.disconnect();
       controls.dispose();
 
@@ -244,8 +367,8 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
     const span = Math.max(widthMeters, depthMeters, 4);
     const settings = resolveRenderSettings(design);
     applyEnvironment(scene, ambientLight, sunLight, settings);
-    applyShadowCamera(sunLight, span);
-    applyCameraPreset(camera, controls, span, settings.cameraPreset);
+    applyShadowCamera(sunLight, span, settings);
+    applyCameraPreset(camera, controls, span, settings);
   }, [design]);
 
   return <div className="three-viewer" ref={containerRef} />;

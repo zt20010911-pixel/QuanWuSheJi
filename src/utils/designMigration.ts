@@ -11,6 +11,7 @@ import {
   type RecognitionQualityReport,
   type RecognitionRoomCandidate,
   type RecognitionWall,
+  type RecognitionWorkspaceState,
   type RenderSettings,
   type Wall
 } from '../types';
@@ -24,11 +25,15 @@ export const DEFAULT_RENDER_SETTINGS: RenderSettings = {
   materialMode: 'clean',
   environmentMode: 'daylight',
   exportPixelRatio: 2,
+  shadowQuality: 'medium',
+  materialDetail: 'basic',
   wallMaterial: '#f2efe8',
   floorMaterial: '#d8c7aa',
   showBackgroundIn3D: false,
   showRoomMaterialsIn3D: true,
-  showCeilingHint: false
+  showCeilingHint: false,
+  cameraViewpoints: [],
+  walkthroughPaths: []
 };
 
 export const DEFAULT_RECOGNITION_CANDIDATE_FILTERS: RecognitionCandidateFilters = {
@@ -42,6 +47,13 @@ export const DEFAULT_RECOGNITION_CANDIDATE_FILTERS: RecognitionCandidateFilters 
   showIssueMarkers: true,
   showDeleted: false,
   showPromoted: true
+};
+
+export const DEFAULT_RECOGNITION_WORKSPACE_STATE: RecognitionWorkspaceState = {
+  step: 'range',
+  activeTool: 'crop',
+  showLowConfidence: false,
+  showIssueMarkers: true
 };
 
 export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
@@ -66,13 +78,16 @@ export const DEFAULT_EXPORT_DRAFT_SETTINGS: ExportDraftSettings = {
 
 const DEFAULT_RECOGNITION_QUALITY_REPORT: RecognitionQualityReport = {
   outerFrameCoverage: 0,
+  completionScore: 0,
   disconnectedEndpointCount: 0,
   lowConfidenceCount: 0,
   possibleFurnitureNoiseCount: 0,
+  noiseScore: 100,
   missingWallHintCount: 0,
   outerGapMarkers: [],
   issueMarkers: [],
   qualityScore: 0,
+  actionableSuggestion: '请先上传户型图并运行识别。',
   suggestionMessages: ['暂无质量报告，请重新识别户型图。']
 };
 
@@ -230,6 +245,10 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
         candidateFilters: {
           ...DEFAULT_RECOGNITION_CANDIDATE_FILTERS,
           ...(design.recognition.candidateFilters ?? {})
+        },
+        workspace: {
+          ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
+          ...(design.recognition.workspace ?? {})
         },
         aiRecognitionDraft: design.recognition.aiRecognitionDraft,
         attemptHistory: design.recognition.attemptHistory ?? [],

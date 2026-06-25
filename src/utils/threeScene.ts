@@ -1,7 +1,16 @@
 import * as THREE from 'three';
 import { resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS, MATERIAL_LIBRARY } from '../data/materials';
-import type { DesignDocument, FurnitureInstance, Opening, Point, RenderSettings, RoomZone, Wall } from '../types';
+import type {
+  DesignDocument,
+  FurnitureInstance,
+  FurnitureMaterialDefinition,
+  Opening,
+  Point,
+  RenderSettings,
+  RoomZone,
+  Wall
+} from '../types';
 import { DEFAULT_RENDER_SETTINGS } from './designMigration';
 
 const WALL_HEIGHT_METERS = 2.8;
@@ -108,20 +117,89 @@ const resolveRenderSettings = (design: DesignDocument): RenderSettings => ({
 const resolveMaterialColor = (materialId: string | undefined, fallback: string) =>
   MATERIAL_LIBRARY.find((item) => item.id === materialId)?.color ?? fallback;
 
+const createProceduralTexture = (color: string, textureType: FurnitureMaterialDefinition['textureType']) => {
+  const size = 96;
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  canvas.width = size;
+  canvas.height = size;
+
+  if (!context) {
+    return undefined;
+  }
+
+  const base = new THREE.Color(color);
+  const light = base.clone().offsetHSL(0, -0.04, 0.16).getStyle();
+  const dark = base.clone().offsetHSL(0, 0.03, -0.12).getStyle();
+
+  context.fillStyle = color;
+  context.fillRect(0, 0, size, size);
+
+  if (textureType === 'grain') {
+    for (let y = 8; y < size; y += 14) {
+      context.strokeStyle = y % 28 === 0 ? dark : light;
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(0, y);
+      context.bezierCurveTo(24, y - 6, 42, y + 8, size, y - 2);
+      context.stroke();
+    }
+  } else if (textureType === 'woven') {
+    context.strokeStyle = light;
+    context.lineWidth = 1;
+    for (let value = 0; value <= size; value += 12) {
+      context.beginPath();
+      context.moveTo(value, 0);
+      context.lineTo(value, size);
+      context.moveTo(0, value);
+      context.lineTo(size, value);
+      context.stroke();
+    }
+  } else if (textureType === 'gloss') {
+    const gradient = context.createLinearGradient(0, 0, size, size);
+    gradient.addColorStop(0, 'rgba(255,255,255,0.38)');
+    gradient.addColorStop(0.42, 'rgba(255,255,255,0.04)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0.1)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, size, size);
+  } else if (textureType === 'matte') {
+    context.fillStyle = dark;
+    for (let x = 6; x < size; x += 18) {
+      for (let y = 10; y < size; y += 18) {
+        context.globalAlpha = 0.18;
+        context.fillRect(x, y, 2, 2);
+      }
+    }
+    context.globalAlpha = 1;
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(2, 2);
+  return texture;
+};
+
 const createStandardMaterial = ({
   color,
   roughness,
   metalness = 0,
   transparent = false,
-  opacity = 1
+  opacity = 1,
+  materialDetail = 'basic',
+  textureType = 'solid'
 }: {
   color: string;
   roughness: number;
   metalness?: number;
   transparent?: boolean;
   opacity?: number;
-}) =>
-  new THREE.MeshStandardMaterial({
+  materialDetail?: RenderSettings['materialDetail'];
+  textureType?: FurnitureMaterialDefinition['textureType'];
+}) => {
+  const material = new THREE.MeshStandardMaterial({
     color,
     roughness,
     metalness,
@@ -129,6 +207,19 @@ const createStandardMaterial = ({
     opacity,
     envMapIntensity: 0.45
   });
+
+  if (materialDetail === 'enhanced' && textureType !== 'solid') {
+    const texture = createProceduralTexture(color, textureType);
+
+    if (texture) {
+      material.map = texture;
+      material.envMapIntensity = textureType === 'gloss' ? 0.72 : 0.52;
+      material.needsUpdate = true;
+    }
+  }
+
+  return material;
+};
 
 const collectPlanBounds = (design: DesignDocument): PlanBounds => {
   const points: Point[] = [];
@@ -178,7 +269,9 @@ const createGroundMesh = (bounds: PlanBounds, settings: RenderSettings) => {
   const material = createStandardMaterial({
     color: settings.floorMaterial || MATERIAL_PRESETS[settings.materialMode].floor,
     roughness: MATERIAL_PRESETS[settings.materialMode].roughness,
-    metalness: MATERIAL_PRESETS[settings.materialMode].metalness
+    metalness: MATERIAL_PRESETS[settings.materialMode].metalness,
+    materialDetail: settings.materialDetail,
+    textureType: 'grain'
   });
   const mesh = new THREE.Mesh(geometry, material);
 
@@ -226,7 +319,9 @@ const createRoomMaterialMeshes = (design: DesignDocument, bounds: PlanBounds, se
       createStandardMaterial({
         color: floorColor,
         roughness: Math.min(MATERIAL_PRESETS[settings.materialMode].roughness + 0.04, 0.9),
-        metalness: 0.01
+        metalness: 0.01,
+        materialDetail: settings.materialDetail,
+        textureType: 'matte'
       })
     );
 
@@ -267,14 +362,18 @@ const createWallMesh = (wall: Wall, bounds: PlanBounds, scalePxPerMeter: number,
     createStandardMaterial({
       color: wallColor,
       roughness: MATERIAL_PRESETS[settings.materialMode].roughness,
-      metalness: MATERIAL_PRESETS[settings.materialMode].metalness
+      metalness: MATERIAL_PRESETS[settings.materialMode].metalness,
+      materialDetail: settings.materialDetail,
+      textureType: 'matte'
     })
   );
   const capMesh = new THREE.Mesh(
     new THREE.BoxGeometry(length, 0.035, thickness + 0.018),
     createStandardMaterial({
       color: new THREE.Color(wallColor).offsetHSL(0, -0.08, -0.08).getStyle(),
-      roughness: 0.7
+      roughness: 0.7,
+      materialDetail: settings.materialDetail,
+      textureType: 'matte'
     })
   );
 
@@ -345,7 +444,11 @@ const createFurnitureMaterial = (furniture: FurnitureInstance, settings: RenderS
   return createStandardMaterial({
     color: color ?? material.color ?? furniture.color,
     roughness: settings.materialMode === 'contrast' ? Math.max(0.3, material.roughness - 0.08) : material.roughness,
-    metalness: material.metalness
+    metalness: material.metalness,
+    transparent: material.category === 'glass',
+    opacity: material.category === 'glass' ? 0.56 : 1,
+    materialDetail: settings.materialDetail,
+    textureType: material.textureType
   });
 };
 
@@ -556,10 +659,20 @@ export const disposeThreeObject = (object: THREE.Object3D) => {
 
     const material = mesh.material;
 
+    const disposeMaterial = (item: THREE.Material) => {
+      const mappedMaterial = item as THREE.MeshStandardMaterial | THREE.MeshBasicMaterial;
+
+      if (mappedMaterial.map) {
+        mappedMaterial.map.dispose();
+      }
+
+      item.dispose();
+    };
+
     if (Array.isArray(material)) {
-      material.forEach((item) => item.dispose());
+      material.forEach(disposeMaterial);
     } else if (material) {
-      material.dispose();
+      disposeMaterial(material);
     }
   });
 };

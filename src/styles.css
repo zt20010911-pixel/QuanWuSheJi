@@ -425,6 +425,22 @@ button:disabled {
   gap: 7px;
 }
 
+.tool-group-list {
+  display: grid;
+  gap: 10px;
+}
+
+.tool-group {
+  display: grid;
+  gap: 6px;
+}
+
+.tool-group-title {
+  color: #6d7888;
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .tool-button {
   display: grid;
   justify-items: center;
@@ -689,6 +705,34 @@ button:disabled {
   box-shadow: 0 8px 22px rgba(33, 43, 54, 0.08);
 }
 
+.canvas-tool-hint {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  z-index: 8;
+  display: grid;
+  max-width: min(560px, calc(100% - 96px));
+  transform: translateX(-50%);
+  gap: 3px;
+  border: 1px solid #d6e1dd;
+  border-radius: 6px;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #536071;
+  pointer-events: none;
+  box-shadow: 0 10px 24px rgba(31, 41, 51, 0.1);
+}
+
+.canvas-tool-hint strong {
+  color: #263041;
+  font-size: 13px;
+}
+
+.canvas-tool-hint span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .properties-panel {
   overflow-y: auto;
 }
@@ -803,6 +847,64 @@ button:disabled {
   padding: 9px 10px;
   background: #f2f6f4;
   color: #536071;
+  font-size: 12px;
+}
+
+.recognition-stepper {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.recognition-stepper button,
+.recognition-quick-actions button {
+  border: 1px solid #d2dad6;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #536071;
+}
+
+.recognition-stepper button {
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  min-height: 54px;
+  padding: 7px 4px;
+  font-size: 12px;
+}
+
+.recognition-stepper button span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #edf3f0;
+  color: #536071;
+  font-weight: 800;
+}
+
+.recognition-stepper button.is-active,
+.recognition-quick-actions button.is-active {
+  border-color: #51a193;
+  background: #e9f5f2;
+  color: #176b61;
+}
+
+.recognition-stepper button.is-active span {
+  background: #51a193;
+  color: #ffffff;
+}
+
+.recognition-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.recognition-quick-actions button {
+  min-height: 32px;
+  padding: 0 6px;
   font-size: 12px;
 }
 
@@ -946,6 +1048,77 @@ button:disabled {
 
 .material-color-row input[type='color'] {
   padding: 3px;
+}
+
+.render-subpanel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d8e5df;
+  border-radius: 6px;
+  padding: 10px;
+  background: #f7faf8;
+}
+
+.inline-title {
+  color: #263041;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.camera-save-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.compact-list {
+  display: grid;
+  gap: 6px;
+}
+
+.compact-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.text-button,
+.icon-text-button {
+  min-height: 30px;
+  border: 1px solid #d2dad6;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #ffffff;
+  color: #536071;
+  text-align: left;
+}
+
+.text-button.is-active {
+  border-color: #51a193;
+  background: #e8f5f1;
+  color: #176b61;
+  font-weight: 800;
+}
+
+.danger-text {
+  color: #b74242;
+}
+
+.muted-text {
+  color: #6b7785;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.button-grid.two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.button-grid.two-columns .secondary-button:first-child {
+  grid-column: 1 / -1;
 }
 
 .material-brush-preview {

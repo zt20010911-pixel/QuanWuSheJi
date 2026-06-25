@@ -496,13 +496,16 @@ export default function DesignerCanvas({
             roomCandidates: [],
             qualityReport: {
               outerFrameCoverage: 0,
+              completionScore: 0,
               disconnectedEndpointCount: 0,
               lowConfidenceCount: 0,
               possibleFurnitureNoiseCount: 0,
+              noiseScore: 100,
               missingWallHintCount: 0,
               outerGapMarkers: [],
               issueMarkers: [],
               qualityScore: 0,
+              actionableSuggestion: '手动补墙后，可继续选择候选墙并写入正式方案。',
               suggestionMessages: ['手动补墙生成的识别层，暂无自动质量报告。']
             },
             candidateFilters: {
@@ -516,6 +519,12 @@ export default function DesignerCanvas({
               showIssueMarkers: true,
               showDeleted: false,
               showPromoted: true
+            },
+            workspace: {
+              step: 'review' as const,
+              activeTool: 'add-gap-wall' as const,
+              showLowConfidence: false,
+              showIssueMarkers: true
             },
             attemptHistory: [],
             wallCount: 0,

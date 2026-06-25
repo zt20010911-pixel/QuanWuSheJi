@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import type {
   BackgroundImage,
+  CameraViewpoint,
   MaterialCategory,
   DesignDocument,
   FeatureModuleKey,
@@ -27,18 +28,21 @@ import type {
   RecognitionProfile,
   RecognitionSession,
   RecognitionSampledWallColor,
+  RecognitionWorkspaceState,
   RenderSettings,
   RoomLabel,
   RoomZone,
   Selection,
   Wall,
-  WallDrawMode
+  WallDrawMode,
+  WalkthroughPath
 } from '../types';
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS, MATERIAL_LIBRARY } from '../data/materials';
 import { FURNITURE_MATERIAL_LIBRARY, resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { ROADMAP_MODULES } from '../data/roadmap';
 import { createId, pxToMeters, resizeWallByLength, wallLengthPx } from '../utils/geometry';
 import { createEstimateItems, formatCurrency, getEstimateTotal, getRoomZoneAreaSqm } from '../utils/roomMetrics';
+import RecognitionWorkspaceControls from './RecognitionWorkspaceControls';
 
 type PropertiesPanelProps = {
   design: DesignDocument;
@@ -60,12 +64,15 @@ type PropertiesPanelProps = {
   onExportObjDraft: () => void;
   onStartCalibration: () => void;
   onRecognizeFloorplan: () => void;
+  onRecognizeSelectedArea: () => void;
   recognitionMode: RecognitionMode;
   onRecognitionModeChange: (mode: RecognitionMode) => void;
   recognitionProfile: RecognitionProfile;
   onRecognitionProfileChange: (profile: RecognitionProfile) => void;
   recognitionCropBox: RecognitionCropBox | null;
+  recognitionWorkspace: RecognitionWorkspaceState;
   onRecognitionCropBoxChange: (cropBox: RecognitionCropBox) => void;
+  onRecognitionWorkspaceChange: (patch: Partial<RecognitionWorkspaceState>) => void;
   sampledWallColor?: RecognitionSampledWallColor;
   samplingWallColor: boolean;
   onStartWallColorSampling: () => void;
@@ -92,6 +99,9 @@ type PropertiesPanelProps = {
   recognizingFloorplan: boolean;
   importWizardOpen: boolean;
   recognitionLayer: RecognitionSession | null;
+  canCaptureThreeDViewpoint: boolean;
+  onCaptureThreeDViewpoint: (name: string) => CameraViewpoint | null;
+  onPreviewWalkthrough: (path: WalkthroughPath) => void;
 };
 
 const numberValue = (value: string) => Number.parseFloat(value) || 0;
@@ -150,12 +160,15 @@ export default function PropertiesPanel({
   onExportObjDraft,
   onStartCalibration,
   onRecognizeFloorplan,
+  onRecognizeSelectedArea,
   recognitionMode,
   onRecognitionModeChange,
   recognitionProfile,
   onRecognitionProfileChange,
   recognitionCropBox,
+  recognitionWorkspace,
   onRecognitionCropBoxChange,
+  onRecognitionWorkspaceChange,
   sampledWallColor,
   samplingWallColor,
   onStartWallColorSampling,
@@ -181,7 +194,10 @@ export default function PropertiesPanel({
   onDiscardRecognitionLayer,
   recognizingFloorplan,
   importWizardOpen,
-  recognitionLayer
+  recognitionLayer,
+  canCaptureThreeDViewpoint,
+  onCaptureThreeDViewpoint,
+  onPreviewWalkthrough
 }: PropertiesPanelProps) {
   const selectedWall = selection?.type === 'wall' ? design.walls.find((item) => item.id === selection.id) : undefined;
   const selectedOpening =
@@ -249,6 +265,7 @@ export default function PropertiesPanel({
             <RecognitionModeCard
               recognitionMode={recognitionMode}
               recognitionProfile={recognitionProfile}
+              recognitionWorkspace={recognitionWorkspace}
               recognizingFloorplan={recognizingFloorplan}
               hasBackgroundImage={Boolean(design.backgroundImage)}
               recognitionCropBox={recognitionCropBox}
@@ -256,9 +273,11 @@ export default function PropertiesPanel({
               samplingWallColor={samplingWallColor}
               onRecognitionModeChange={onRecognitionModeChange}
               onRecognitionProfileChange={onRecognitionProfileChange}
+              onRecognitionWorkspaceChange={onRecognitionWorkspaceChange}
               onRecognitionCropBoxChange={onRecognitionCropBoxChange}
               onStartWallColorSampling={onStartWallColorSampling}
               onRecognizeFloorplan={onRecognizeFloorplan}
+              onRecognizeSelectedArea={onRecognizeSelectedArea}
             />
             {design.backgroundImage && importWizardOpen && (
               <ImportWizardCard
@@ -289,6 +308,7 @@ export default function PropertiesPanel({
                 onSaveAiDraft={onSaveAiRecognitionDraft}
                 onDiscard={onDiscardRecognitionLayer}
                 onRecognizeAgain={onRecognizeFloorplan}
+                onRecognizeSelectedArea={onRecognizeSelectedArea}
                 selectedIssueMarkerId={selection?.type === 'recognitionIssueMarker' ? selection.id : null}
                 onApplyAllOuterGaps={onApplyAllOuterGaps}
                 onApplySelectedIssueMarker={onApplySelectedIssueMarker}
@@ -354,7 +374,13 @@ export default function PropertiesPanel({
               onExportEstimateCsv={onExportEstimateCsv}
               onExportHtmlReport={onExportHtmlReport}
             />
-            <RenderSettingsEditor design={design} onChange={onChange} />
+            <RenderSettingsEditor
+              design={design}
+              onChange={onChange}
+              canCaptureThreeDViewpoint={canCaptureThreeDViewpoint}
+              onCaptureThreeDViewpoint={onCaptureThreeDViewpoint}
+              onPreviewWalkthrough={onPreviewWalkthrough}
+            />
             <FeatureCenterPanel design={design} collapsed />
           </>
         )}
@@ -380,6 +406,7 @@ function CurrentPlanSummary({ design }: { design: DesignDocument }) {
 function RecognitionModeCard({
   recognitionMode,
   recognitionProfile,
+  recognitionWorkspace,
   recognizingFloorplan,
   hasBackgroundImage,
   recognitionCropBox,
@@ -387,12 +414,15 @@ function RecognitionModeCard({
   samplingWallColor,
   onRecognitionModeChange,
   onRecognitionProfileChange,
+  onRecognitionWorkspaceChange,
   onRecognitionCropBoxChange,
   onStartWallColorSampling,
-  onRecognizeFloorplan
+  onRecognizeFloorplan,
+  onRecognizeSelectedArea
 }: {
   recognitionMode: RecognitionMode;
   recognitionProfile: RecognitionProfile;
+  recognitionWorkspace: RecognitionWorkspaceState;
   recognizingFloorplan: boolean;
   hasBackgroundImage: boolean;
   recognitionCropBox: RecognitionCropBox | null;
@@ -400,9 +430,11 @@ function RecognitionModeCard({
   samplingWallColor: boolean;
   onRecognitionModeChange: (mode: RecognitionMode) => void;
   onRecognitionProfileChange: (profile: RecognitionProfile) => void;
+  onRecognitionWorkspaceChange: (patch: Partial<RecognitionWorkspaceState>) => void;
   onRecognitionCropBoxChange: (cropBox: RecognitionCropBox) => void;
   onStartWallColorSampling: () => void;
   onRecognizeFloorplan: () => void;
+  onRecognizeSelectedArea: () => void;
 }) {
   const profileOptions: Array<{ value: RecognitionProfile; label: string }> = [
     { value: 'balanced', label: '均衡' },
@@ -425,8 +457,16 @@ function RecognitionModeCard({
     <div className="property-stack recognition-mode-stack">
       <h2>
         <Wand2 size={16} />
-        识别工作台
+        识别工作台 2.0
       </h2>
+      <RecognitionWorkspaceControls
+        recognitionWorkspace={recognitionWorkspace}
+        hasBackgroundImage={hasBackgroundImage}
+        recognizingFloorplan={recognizingFloorplan}
+        samplingWallColor={samplingWallColor}
+        onRecognitionWorkspaceChange={onRecognitionWorkspaceChange}
+        onStartWallColorSampling={onStartWallColorSampling}
+      />
       <div className="draw-mode-toggle" aria-label="户型识别模式">
         {profileOptions.map((item) => (
           <button
@@ -494,6 +534,9 @@ function RecognitionModeCard({
         <Wand2 size={16} />
         {recognizingFloorplan ? '正在识别' : '按当前模式重新识别'}
       </button>
+      <button className="secondary-button" type="button" onClick={onRecognizeSelectedArea} disabled={!hasBackgroundImage || recognizingFloorplan}>
+        按选区重新识别
+      </button>
     </div>
   );
 }
@@ -546,6 +589,7 @@ function RecognitionLayerEditor({
   onSaveAiDraft,
   onDiscard,
   onRecognizeAgain,
+  onRecognizeSelectedArea,
   selectedIssueMarkerId,
   onApplyAllOuterGaps,
   onApplySelectedIssueMarker,
@@ -571,6 +615,7 @@ function RecognitionLayerEditor({
   onSaveAiDraft: () => void;
   onDiscard: () => void;
   onRecognizeAgain: () => void;
+  onRecognizeSelectedArea: () => void;
   selectedIssueMarkerId: string | null;
   onApplyAllOuterGaps: () => void;
   onApplySelectedIssueMarker: (id: string) => void;
@@ -626,6 +671,13 @@ function RecognitionLayerEditor({
             candidateFilters: {
               ...filters,
               [key]: value
+            },
+            workspace: {
+              step: 'review',
+              activeTool: 'select-candidate',
+              ...(current.recognition.workspace ?? recognitionLayer.workspace),
+              showLowConfidence: key === 'showLowConfidence' ? value : Boolean(filters.showLowConfidence),
+              showIssueMarkers: key === 'showIssueMarkers' ? value : Boolean(filters.showIssueMarkers)
             }
           }
         : current.recognition
@@ -649,20 +701,27 @@ function RecognitionLayerEditor({
           <Wand2 size={16} />
           {recognizingFloorplan ? '正在识别' : '重新识别'}
         </button>
+        <button className="secondary-button" type="button" onClick={onRecognizeSelectedArea} disabled={selectedWallCount === 0 || recognizingFloorplan}>
+          按选区识别
+        </button>
+      </div>
+      <div className="property-button-row">
         <button className="secondary-button" type="button" onClick={onApplyAllOuterGaps} disabled={activeOuterGapCount === 0}>
           补全建议
         </button>
+        <button className="primary-button" type="button" onClick={onPromoteAll} disabled={activeCount === 0}>
+          写入正式方案
+        </button>
       </div>
-      <button className="primary-button" type="button" onClick={onPromoteAll} disabled={activeCount === 0}>
-        写入正式方案
-      </button>
       {qualityReport && (
         <div className="recognition-quality">
           <strong>识别质量</strong>
           <span>质量分：{qualityReport.qualityScore} / 100 · 疑似漏墙：{qualityReport.missingWallHintCount} 个</span>
+          <span>完整度：{qualityReport.completionScore} / 100 · 噪声控制：{qualityReport.noiseScore} / 100</span>
           <span>外框覆盖：{Math.round(qualityReport.outerFrameCoverage * 100)}%</span>
           <span>断点：{qualityReport.disconnectedEndpointCount} 个 · 低置信：{qualityReport.lowConfidenceCount} 个</span>
           <span>疑似家具线：{qualityReport.possibleFurnitureNoiseCount} 条</span>
+          <span>建议：{qualityReport.actionableSuggestion}</span>
           <div className="quality-suggestions">
             {qualityReport.suggestionMessages.map((message) => (
               <span key={message}>{message}</span>
@@ -1595,14 +1654,32 @@ const exportPixelRatios: Array<{ value: RenderSettings['exportPixelRatio']; labe
   { value: 3, label: '3x 超清' }
 ];
 
+const shadowQualities: Array<{ value: RenderSettings['shadowQuality']; label: string }> = [
+  { value: 'low', label: '流畅' },
+  { value: 'medium', label: '均衡' },
+  { value: 'high', label: '精细' }
+];
+
+const materialDetails: Array<{ value: RenderSettings['materialDetail']; label: string }> = [
+  { value: 'basic', label: '基础' },
+  { value: 'enhanced', label: '精细纹理' }
+];
+
 function RenderSettingsEditor({
   design,
-  onChange
+  onChange,
+  canCaptureThreeDViewpoint,
+  onCaptureThreeDViewpoint,
+  onPreviewWalkthrough
 }: {
   design: DesignDocument;
   onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+  canCaptureThreeDViewpoint: boolean;
+  onCaptureThreeDViewpoint: (name: string) => CameraViewpoint | null;
+  onPreviewWalkthrough: (path: WalkthroughPath) => void;
 }) {
   const settings = design.renderSettings;
+  const [viewpointName, setViewpointName] = useState('自定义机位');
 
   if (!settings) {
     return null;
@@ -1614,6 +1691,79 @@ function RenderSettingsEditor({
       renderSettings: current.renderSettings ? { ...current.renderSettings, ...patch } : current.renderSettings
     }));
   };
+  const activeWalkthroughPath =
+    settings.walkthroughPaths.find((path) => path.id === settings.activeWalkthroughPathId) ?? settings.walkthroughPaths[0];
+
+  const saveCurrentViewpoint = () => {
+    const viewpoint = onCaptureThreeDViewpoint(viewpointName.trim() || `自定义机位 ${settings.cameraViewpoints.length + 1}`);
+
+    if (!viewpoint) {
+      return;
+    }
+
+    updateRenderSettings({
+      cameraViewpoints: [viewpoint, ...settings.cameraViewpoints],
+      activeViewpointId: viewpoint.id
+    });
+    setViewpointName(`自定义机位 ${settings.cameraViewpoints.length + 2}`);
+  };
+
+  const deleteViewpoint = (id: string) => {
+    updateRenderSettings({
+      cameraViewpoints: settings.cameraViewpoints.filter((viewpoint) => viewpoint.id !== id),
+      activeViewpointId: settings.activeViewpointId === id ? undefined : settings.activeViewpointId,
+      walkthroughPaths: settings.walkthroughPaths.map((path) => ({
+        ...path,
+        keyframes: path.keyframes.filter((keyframe) => keyframe.id !== id)
+      }))
+    });
+  };
+
+  const addWalkthroughKeyframe = () => {
+    const viewpoint = onCaptureThreeDViewpoint(`路径点 ${activeWalkthroughPath ? activeWalkthroughPath.keyframes.length + 1 : 1}`);
+
+    if (!viewpoint) {
+      return;
+    }
+
+    const keyframe = {
+      id: viewpoint.id,
+      name: viewpoint.name,
+      position: viewpoint.position,
+      target: viewpoint.target,
+      fov: viewpoint.fov,
+      durationSeconds: 2.4
+    };
+    const path =
+      activeWalkthroughPath ??
+      ({
+        id: `walkthrough-${Date.now().toString(36)}`,
+        name: '默认漫游路径',
+        keyframes: [],
+        createdAt: new Date().toISOString()
+      } satisfies WalkthroughPath);
+    const nextPath = {
+      ...path,
+      keyframes: [...path.keyframes, keyframe]
+    };
+
+    updateRenderSettings({
+      activeWalkthroughPathId: nextPath.id,
+      walkthroughPaths: [nextPath, ...settings.walkthroughPaths.filter((item) => item.id !== nextPath.id)]
+    });
+  };
+
+  const clearWalkthroughPath = () => {
+    if (!activeWalkthroughPath) {
+      return;
+    }
+
+    updateRenderSettings({
+      walkthroughPaths: settings.walkthroughPaths.map((path) =>
+        path.id === activeWalkthroughPath.id ? { ...path, keyframes: [] } : path
+      )
+    });
+  };
 
   return (
     <div className="property-stack render-settings-stack">
@@ -1622,7 +1772,12 @@ function RenderSettingsEditor({
         <span>相机视角</span>
         <select
           value={settings.cameraPreset}
-          onChange={(event) => updateRenderSettings({ cameraPreset: event.target.value as RenderSettings['cameraPreset'] })}
+          onChange={(event) =>
+            updateRenderSettings({
+              cameraPreset: event.target.value as RenderSettings['cameraPreset'],
+              activeViewpointId: undefined
+            })
+          }
         >
           {cameraPresets.map((item) => (
             <option key={item.value} value={item.value}>
@@ -1683,6 +1838,32 @@ function RenderSettingsEditor({
           ))}
         </select>
       </label>
+      <label>
+        <span>阴影质量</span>
+        <select
+          value={settings.shadowQuality}
+          onChange={(event) => updateRenderSettings({ shadowQuality: event.target.value as RenderSettings['shadowQuality'] })}
+        >
+          {shadowQualities.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>材质精细度</span>
+        <select
+          value={settings.materialDetail}
+          onChange={(event) => updateRenderSettings({ materialDetail: event.target.value as RenderSettings['materialDetail'] })}
+        >
+          {materialDetails.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="material-color-row">
         <label>
           <span>墙面</span>
@@ -1717,6 +1898,67 @@ function RenderSettingsEditor({
         />
         <span>3D 显示底图参考</span>
       </label>
+      <div className="render-subpanel">
+        <div className="inline-title">相机机位</div>
+        <div className="camera-save-row">
+          <input
+            value={viewpointName}
+            onChange={(event) => setViewpointName(event.target.value)}
+            placeholder="例如 客厅视角"
+            disabled={!canCaptureThreeDViewpoint}
+          />
+          <button className="secondary-button" type="button" onClick={saveCurrentViewpoint} disabled={!canCaptureThreeDViewpoint}>
+            保存当前机位
+          </button>
+        </div>
+        <div className="compact-list">
+          {settings.cameraViewpoints.length === 0 ? (
+            <span className="muted-text">切到 3D 后调整视角，可保存为自定义机位。</span>
+          ) : (
+            settings.cameraViewpoints.map((viewpoint) => (
+              <div className="compact-list-row" key={viewpoint.id}>
+                <button
+                  className={settings.activeViewpointId === viewpoint.id ? 'text-button is-active' : 'text-button'}
+                  type="button"
+                  onClick={() => updateRenderSettings({ activeViewpointId: viewpoint.id })}
+                >
+                  {viewpoint.name}
+                </button>
+                <button className="icon-text-button danger-text" type="button" onClick={() => deleteViewpoint(viewpoint.id)}>
+                  删除
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+      <div className="render-subpanel">
+        <div className="inline-title">漫游路径</div>
+        <div className="button-grid two-columns">
+          <button className="secondary-button" type="button" onClick={addWalkthroughKeyframe} disabled={!canCaptureThreeDViewpoint}>
+            添加当前视角为路径点
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => activeWalkthroughPath && onPreviewWalkthrough(activeWalkthroughPath)}
+            disabled={!activeWalkthroughPath || activeWalkthroughPath.keyframes.length === 0}
+          >
+            预览漫游
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={clearWalkthroughPath}
+            disabled={!activeWalkthroughPath || activeWalkthroughPath.keyframes.length === 0}
+          >
+            清空路径点
+          </button>
+        </div>
+        <div className="muted-text">
+          {activeWalkthroughPath ? `当前路径：${activeWalkthroughPath.keyframes.length} 个点` : '尚未创建漫游路径'}
+        </div>
+      </div>
       <button
         className="secondary-button ai-draft-button"
         type="button"

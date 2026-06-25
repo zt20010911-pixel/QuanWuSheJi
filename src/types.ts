@@ -18,7 +18,7 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 11;
+export const DESIGN_DOCUMENT_VERSION = 13;
 
 export type Selection =
   | { type: 'wall'; id: string }
@@ -300,6 +300,17 @@ export type RecognitionAttemptSnapshot = {
   qualityScore: number;
 };
 
+export type RecognitionWorkspaceStep = 'range' | 'recognize' | 'review' | 'promote';
+
+export type RecognitionWorkspaceTool = 'crop' | 'sample-color' | 'select-candidate' | 'add-gap-wall';
+
+export type RecognitionWorkspaceState = {
+  step: RecognitionWorkspaceStep;
+  activeTool: RecognitionWorkspaceTool;
+  showLowConfidence: boolean;
+  showIssueMarkers: boolean;
+};
+
 export type RecognitionCandidateStatus = 'active' | 'deleted' | 'promoted';
 
 export type RecognitionCandidateSource = 'scan' | 'gap' | 'graph' | 'inferred' | 'manual' | 'ai-draft';
@@ -346,13 +357,16 @@ export type RecognitionRoomCandidate = {
 
 export type RecognitionQualityReport = {
   outerFrameCoverage: number;
+  completionScore: number;
   disconnectedEndpointCount: number;
   lowConfidenceCount: number;
   possibleFurnitureNoiseCount: number;
+  noiseScore: number;
   missingWallHintCount: number;
   outerGapMarkers: RecognitionIssueMarker[];
   issueMarkers: RecognitionIssueMarker[];
   qualityScore: number;
+  actionableSuggestion: string;
   suggestionMessages: string[];
 };
 
@@ -399,6 +413,7 @@ export type RecognitionSession = {
   roomCandidates?: RecognitionRoomCandidate[];
   qualityReport?: RecognitionQualityReport;
   candidateFilters?: RecognitionCandidateFilters;
+  workspace?: RecognitionWorkspaceState;
   aiRecognitionDraft?: AiRecognitionDraft;
   attemptHistory?: RecognitionAttemptSnapshot[];
   wallCount: number;
@@ -427,17 +442,58 @@ export type RenderMaterialMode = 'clean' | 'warm' | 'contrast';
 
 export type RenderEnvironmentMode = 'studio' | 'daylight' | 'evening';
 
+export type RenderShadowQuality = 'low' | 'medium' | 'high';
+
+export type RenderMaterialDetail = 'basic' | 'enhanced';
+
+export type ThreeVector = {
+  x: number;
+  y: number;
+  z: number;
+};
+
+export type CameraViewpoint = {
+  id: string;
+  name: string;
+  position: ThreeVector;
+  target: ThreeVector;
+  fov: number;
+  createdAt: string;
+};
+
+export type WalkthroughKeyframe = {
+  id: string;
+  name: string;
+  position: ThreeVector;
+  target: ThreeVector;
+  fov: number;
+  durationSeconds: number;
+};
+
+export type WalkthroughPath = {
+  id: string;
+  name: string;
+  keyframes: WalkthroughKeyframe[];
+  createdAt: string;
+};
+
 export type RenderSettings = {
   cameraPreset: RenderCameraPreset;
   lightMode: RenderLightMode;
   materialMode: RenderMaterialMode;
   environmentMode: RenderEnvironmentMode;
   exportPixelRatio: 1 | 2 | 3;
+  shadowQuality: RenderShadowQuality;
+  materialDetail: RenderMaterialDetail;
   wallMaterial: string;
   floorMaterial: string;
   showBackgroundIn3D: boolean;
   showRoomMaterialsIn3D: boolean;
   showCeilingHint: boolean;
+  cameraViewpoints: CameraViewpoint[];
+  activeViewpointId?: string;
+  walkthroughPaths: WalkthroughPath[];
+  activeWalkthroughPathId?: string;
 };
 
 export type CloudTaskDraft = {

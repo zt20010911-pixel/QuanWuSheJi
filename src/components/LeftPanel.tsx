@@ -42,16 +42,37 @@ type LeftPanelProps = {
   onToggleFurnitureComboFavorite: (id: string) => void;
 };
 
-const tools: Array<{ mode: ToolMode; label: string; title: string; icon: typeof MousePointer2 }> = [
-  { mode: 'select', label: '选择', title: '选择和移动对象', icon: MousePointer2 },
-  { mode: 'wall', label: '墙体', title: '绘制正式墙体', icon: Minus },
-  { mode: 'recognition-wall', label: '补墙', title: '补充识别图层墙体', icon: Ruler },
-  { mode: 'room-zone', label: '房间', title: '绘制房间区域并统计面积', icon: Square },
-  { mode: 'material-brush', label: '材质', title: '用材质刷快速应用家具或房间材料', icon: Brush },
-  { mode: 'door', label: '门', title: '在墙上放置门', icon: DoorOpen },
-  { mode: 'window', label: '窗', title: '在墙上放置窗', icon: Square },
-  { mode: 'calibrate', label: '标定', title: '用两点标定户型图比例', icon: Ruler },
-  { mode: 'pan', label: '平移', title: '拖动画布视图', icon: Hand }
+const toolGroups: Array<{
+  title: string;
+  tools: Array<{ mode: ToolMode; label: string; title: string; icon: typeof MousePointer2 }>;
+}> = [
+  {
+    title: '绘制',
+    tools: [
+      { mode: 'select', label: '选择', title: '选择和移动对象', icon: MousePointer2 },
+      { mode: 'wall', label: '墙体', title: '绘制正式墙体', icon: Minus },
+      { mode: 'recognition-wall', label: '补墙', title: '补充识别图层墙体', icon: Ruler },
+      { mode: 'room-zone', label: '房间', title: '绘制房间区域并统计面积', icon: Square }
+    ]
+  },
+  {
+    title: '门窗',
+    tools: [
+      { mode: 'door', label: '门', title: '在墙上放置门', icon: DoorOpen },
+      { mode: 'window', label: '窗', title: '在墙上放置窗', icon: Square }
+    ]
+  },
+  {
+    title: '材质与标注',
+    tools: [
+      { mode: 'material-brush', label: '材质', title: '用材质刷快速应用家具或房间材料', icon: Brush },
+      { mode: 'calibrate', label: '标定', title: '用两点标定户型图比例', icon: Ruler }
+    ]
+  },
+  {
+    title: '视图',
+    tools: [{ mode: 'pan', label: '平移', title: '拖动画布视图', icon: Hand }]
+  }
 ];
 
 const getRecommendationRoomKeys = (roomNames: string[]) => {
@@ -187,24 +208,27 @@ export default function LeftPanel({
       <section className="panel-section">
         <div className="section-title">
           <MousePointer2 size={16} />
-          <span>绘图工具</span>
+          <span>工作流程</span>
         </div>
-        <label className="upload-button">
-          <Upload size={17} />
-          <span>上传户型图</span>
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
+        <div className="tool-group">
+          <span className="tool-group-title">导入</span>
+          <label className="upload-button">
+            <Upload size={17} />
+            <span>上传户型图</span>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
 
-              if (file) {
-                onBackgroundUpload(file);
-                event.target.value = '';
-              }
-            }}
-          />
-        </label>
+                if (file) {
+                  onBackgroundUpload(file);
+                  event.target.value = '';
+                }
+              }}
+            />
+          </label>
+        </div>
         <div className="draw-options">
           <div className="draw-mode-toggle" aria-label="墙体绘制模式">
             <button
@@ -229,23 +253,30 @@ export default function LeftPanel({
             <span>显示墙长</span>
           </label>
         </div>
-        <div className="tool-grid">
-          {tools.map((tool) => {
-            const Icon = tool.icon;
+        <div className="tool-group-list">
+          {toolGroups.map((group) => (
+            <div className="tool-group" key={group.title}>
+              <span className="tool-group-title">{group.title}</span>
+              <div className="tool-grid">
+                {group.tools.map((tool) => {
+                  const Icon = tool.icon;
 
-            return (
-              <button
-                className={`tool-button ${mode === tool.mode ? 'is-active' : ''}`}
-                key={tool.mode}
-                onClick={() => onModeChange(tool.mode)}
-                title={tool.title}
-                type="button"
-              >
-                <Icon size={18} />
-                <span>{tool.label}</span>
-              </button>
-            );
-          })}
+                  return (
+                    <button
+                      className={`tool-button ${mode === tool.mode ? 'is-active' : ''}`}
+                      key={tool.mode}
+                      onClick={() => onModeChange(tool.mode)}
+                      title={tool.title}
+                      type="button"
+                    >
+                      <Icon size={18} />
+                      <span>{tool.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 

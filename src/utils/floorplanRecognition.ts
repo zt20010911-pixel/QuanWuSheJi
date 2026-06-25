@@ -1260,6 +1260,14 @@ const createQualityReport = (
   const outerGapMarkers = createOuterGapMarkers(walls, gridSize);
   const endpointMarkers = createEndpointIssueMarkers(walls, gridSize, scalePxPerMeter);
   const missingWallHintCount = outerGapMarkers.length + endpointMarkers.length;
+  const completionScore = Math.max(
+    0,
+    Math.min(100, Math.round(outerFrameCoverage * 74 + Math.max(0, 26 - disconnectedEndpointCount * 1.8)))
+  );
+  const noiseScore = Math.max(
+    0,
+    Math.min(100, Math.round(100 - lowConfidenceCount * 5.5 - possibleFurnitureNoiseCount * 8))
+  );
   const qualityScore = Math.max(
     0,
     Math.min(
@@ -1298,15 +1306,27 @@ const createQualityReport = (
     suggestionMessages.push('识别质量较稳定，可按墙体、门窗、房间分组确认写入。');
   }
 
+  const actionableSuggestion =
+    outerFrameCoverage < 0.72
+      ? '先点击补全建议，补齐外框缺口后再写入正式方案。'
+      : disconnectedEndpointCount > 8
+        ? '先合并候选墙并处理断点，再写入正式方案。'
+        : lowConfidenceCount > 0 || possibleFurnitureNoiseCount > 3
+          ? '先隐藏低置信候选，确认主要墙体后再分组写入。'
+          : '识别结果较稳定，可以选择墙体、门窗或房间候选写入正式方案。';
+
   return {
     outerFrameCoverage,
+    completionScore,
     disconnectedEndpointCount,
     lowConfidenceCount,
     possibleFurnitureNoiseCount,
+    noiseScore,
     missingWallHintCount,
     outerGapMarkers,
     issueMarkers: [...outerGapMarkers, ...endpointMarkers],
     qualityScore,
+    actionableSuggestion,
     suggestionMessages
   };
 };
