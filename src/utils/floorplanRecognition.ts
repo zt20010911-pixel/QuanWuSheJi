@@ -138,6 +138,27 @@ const isInsideCropBox = (backgroundImage: BackgroundImage, x: number, y: number,
   );
 };
 
+const getEffectiveRecognitionSize = (
+  backgroundImage: BackgroundImage,
+  imageWidth: number,
+  imageHeight: number,
+  cropBox?: RecognitionCropBox
+) => {
+  if (!cropBox) {
+    return { width: imageWidth, height: imageHeight };
+  }
+
+  const left = Math.max(0, cropBox.x - backgroundImage.x);
+  const top = Math.max(0, cropBox.y - backgroundImage.y);
+  const right = Math.min(imageWidth, cropBox.x + cropBox.width - backgroundImage.x);
+  const bottom = Math.min(imageHeight, cropBox.y + cropBox.height - backgroundImage.y);
+
+  return {
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top)
+  };
+};
+
 const createWallMask = async (
   backgroundImage: BackgroundImage,
   mode: RecognitionMode,
@@ -761,6 +782,142 @@ const createBridgeWalls = (
   return bridgeWalls;
 };
 
+const getNearestSupportedLine = ({
+  lineCoordinates,
+  from,
+  maxGap,
+  minGap,
+  hasSupport
+}: {
+  lineCoordinates: number[];
+  from: number;
+  maxGap: number;
+  minGap: number;
+  hasSupport: (line: number) => boolean;
+}) => {
+  let bestLine: number | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  lineCoordinates.forEach((line) => {
+    const distance = Math.abs(line - from);
+
+    if (distance < minGap || distance > maxGap || !hasSupport(line)) {
+      return;
+    }
+
+    if (distance < bestDistance) {
+      bestLine = line;
+      bestDistance = distance;
+    }
+  });
+
+  return bestLine;
+};
+
+const createEndpointExtensionWalls = (
+  walls: RecognizedFloorplanWall[],
+  gridSize: number,
+  minWallLength: number,
+  profile: RecognitionProfile
+): RecognizedFloorplanWall[] => {
+  if (walls.length < 4) {
+    return [];
+  }
+
+  const lineTolerance = Math.max(gridSize * 1.05, 20);
+  const minExtension = Math.max(gridSize * 1.2, minWallLength * (profile === 'wall-priority' ? 0.28 : 0.42));
+  const maxExtension = Math.max(gridSize * (profile === 'wall-priority' ? 9.5 : 6.5), minWallLength * (profile === 'wall-priority' ? 2.1 : 1.45));
+  const horizontalWalls = walls.filter(isHorizontalWall);
+  const verticalWalls = walls.filter((wall) => !isHorizontalWall(wall));
+  const xLines = clusterAxisValues(verticalWalls.map(getWallLineCoordinate), lineTolerance);
+  const yLines = clusterAxisValues(horizontalWalls.map(getWallLineCoordinate), lineTolerance);
+  const extensionWalls: RecognizedFloorplanWall[] = [];
+
+  horizontalWalls.forEach((wall) => {
+    const y = snapValue(getWallLineCoordinate(wall), gridSize);
+    const range = getWallRange(wall);
+    const startTarget = getNearestSupportedLine({
+      lineCoordinates: xLines.filter((x) => x < range.start),
+      from: range.start,
+      minGap: minExtension,
+      maxGap: maxExtension,
+      hasSupport: (x) => hasPerpendicularSupport(walls, 'vertical', x, y, lineTolerance)
+    });
+    const endTarget = getNearestSupportedLine({
+      lineCoordinates: xLines.filter((x) => x > range.end),
+      from: range.end,
+      minGap: minExtension,
+      maxGap: maxExtension,
+      hasSupport: (x) => hasPerpendicularSupport(walls, 'vertical', x, y, lineTolerance)
+    });
+
+    [
+      startTarget
+        ? { start: snapValue(startTarget, gridSize), end: snapValue(range.start, gridSize) }
+        : null,
+      endTarget
+        ? { start: snapValue(range.end, gridSize), end: snapValue(endTarget, gridSize) }
+        : null
+    ].forEach((candidate) => {
+      if (!candidate || Math.abs(candidate.end - candidate.start) < minExtension) {
+        return;
+      }
+
+      extensionWalls.push({
+        id: createId('auto-wall'),
+        start: { x: candidate.start, y },
+        end: { x: candidate.end, y },
+        thickness: Math.max(MIN_WALL_THICKNESS + 5, Math.round(gridSize * 0.48)),
+        confidence: 0.58,
+        source: 'inferred'
+      });
+    });
+  });
+
+  verticalWalls.forEach((wall) => {
+    const x = snapValue(getWallLineCoordinate(wall), gridSize);
+    const range = getWallRange(wall);
+    const startTarget = getNearestSupportedLine({
+      lineCoordinates: yLines.filter((y) => y < range.start),
+      from: range.start,
+      minGap: minExtension,
+      maxGap: maxExtension,
+      hasSupport: (y) => hasPerpendicularSupport(walls, 'horizontal', y, x, lineTolerance)
+    });
+    const endTarget = getNearestSupportedLine({
+      lineCoordinates: yLines.filter((y) => y > range.end),
+      from: range.end,
+      minGap: minExtension,
+      maxGap: maxExtension,
+      hasSupport: (y) => hasPerpendicularSupport(walls, 'horizontal', y, x, lineTolerance)
+    });
+
+    [
+      startTarget
+        ? { start: snapValue(startTarget, gridSize), end: snapValue(range.start, gridSize) }
+        : null,
+      endTarget
+        ? { start: snapValue(range.end, gridSize), end: snapValue(endTarget, gridSize) }
+        : null
+    ].forEach((candidate) => {
+      if (!candidate || Math.abs(candidate.end - candidate.start) < minExtension) {
+        return;
+      }
+
+      extensionWalls.push({
+        id: createId('auto-wall'),
+        start: { x, y: candidate.start },
+        end: { x, y: candidate.end },
+        thickness: Math.max(MIN_WALL_THICKNESS + 5, Math.round(gridSize * 0.48)),
+        confidence: 0.58,
+        source: 'inferred'
+      });
+    });
+  });
+
+  return extensionWalls;
+};
+
 const hasPerpendicularSupport = (
   walls: RecognizedFloorplanWall[],
   orientation: 'horizontal' | 'vertical',
@@ -1343,16 +1500,18 @@ export const recognizeFloorplanWalls = async (
       ? ['dark', 'gray-structure', 'sampled-color', 'grid-completion']
       : ['dark', 'gray-structure', 'grid-completion'];
   const { mask, width, height } = await createWallMask(backgroundImage, mode, profile, options.cropBox, options.sampledWallColor);
+  const effectiveSize = getEffectiveRecognitionSize(backgroundImage, width, height, options.cropBox);
+  const effectiveImageSize = Math.min(effectiveSize.width, effectiveSize.height);
   const minRunLength =
     mode === 'complete'
-      ? Math.max(options.gridSize * (profile === 'wall-priority' ? 1.65 : 2.1), Math.min(width, height) * (profile === 'wall-priority' ? 0.028 : 0.034))
-      : Math.max(options.gridSize * 3, Math.min(width, height) * 0.055);
+      ? Math.max(options.gridSize * (profile === 'wall-priority' ? 1.35 : 1.85), effectiveImageSize * (profile === 'wall-priority' ? 0.022 : 0.03))
+      : Math.max(options.gridSize * 3, effectiveImageSize * 0.055);
   const horizontalBands = extractBands(mask, width, height, 'horizontal', minRunLength);
   const verticalBands = extractBands(mask, width, height, 'vertical', minRunLength);
   const minWallLength =
     mode === 'complete'
-      ? Math.max(options.gridSize * (profile === 'wall-priority' ? 2.15 : 2.7), Math.min(width, height) * (profile === 'wall-priority' ? 0.038 : 0.046))
-      : Math.max(options.gridSize * 4, Math.min(width, height) * 0.07);
+      ? Math.max(options.gridSize * (profile === 'wall-priority' ? 1.8 : 2.45), effectiveImageSize * (profile === 'wall-priority' ? 0.031 : 0.042))
+      : Math.max(options.gridSize * 4, effectiveImageSize * 0.07);
   const rawWalls = [
     ...horizontalBands.map((band) => toWall(band, 'horizontal', backgroundImage, options.gridSize)),
     ...verticalBands.map((band) => toWall(band, 'vertical', backgroundImage, options.gridSize))
@@ -1361,11 +1520,13 @@ export const recognizeFloorplanWalls = async (
     rawWalls.filter((wall) => getWallLength(wall) >= minWallLength),
     options.gridSize
   );
-  const recognizedWalls = filterRecognizedWalls(candidateWalls, options.gridSize, Math.min(width, height), minWallLength, mode, profile);
+  const recognizedWalls = filterRecognizedWalls(candidateWalls, options.gridSize, effectiveImageSize, minWallLength, mode, profile);
   const inferredWalls = mode === 'complete' ? createBridgeWalls(recognizedWalls, options.gridSize, minWallLength, profile) : [];
   const bridgedWalls = mode === 'complete' ? dedupeRecognizedWalls([...recognizedWalls, ...inferredWalls], options.gridSize) : recognizedWalls;
-  const completionWalls = mode === 'complete' ? createGridCompletionWalls(bridgedWalls, options.gridSize, minWallLength, profile) : [];
-  const walls = mode === 'complete' ? dedupeRecognizedWalls([...bridgedWalls, ...completionWalls], options.gridSize) : recognizedWalls;
+  const extensionWalls = mode === 'complete' ? createEndpointExtensionWalls(bridgedWalls, options.gridSize, minWallLength, profile) : [];
+  const extendedWalls = mode === 'complete' ? dedupeRecognizedWalls([...bridgedWalls, ...extensionWalls], options.gridSize) : bridgedWalls;
+  const completionWalls = mode === 'complete' ? createGridCompletionWalls(extendedWalls, options.gridSize, minWallLength, profile) : [];
+  const walls = mode === 'complete' ? dedupeRecognizedWalls([...extendedWalls, ...completionWalls], options.gridSize) : recognizedWalls;
   const openingCandidates = createOpeningCandidates(recognizedWalls, walls, options.gridSize, options.scalePxPerMeter);
   const roomCandidates = createRoomCandidates(walls, options.gridSize, options.scalePxPerMeter);
   const qualityReport = createQualityReport(walls, openingCandidates, roomCandidates, options.gridSize, options.scalePxPerMeter);
