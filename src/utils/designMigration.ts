@@ -110,7 +110,24 @@ const DEFAULT_COLLABORATION_DRAFT = {
 const DEFAULT_MOBILE_CAPTURE_DRAFT = {
   enabled: false,
   source: 'manual' as const,
-  note: '预留手机 LiDAR、AR、照片采集数据导入。'
+  note: '预留手机 LiDAR、AR、照片采集数据导入。',
+  imports: []
+};
+
+const DEFAULT_SHARE_PACKAGE_DRAFT = {
+  enabled: true,
+  includePlanImage: true,
+  includeJson: true,
+  includeBudget: true,
+  note: '本地分享包用于导出给他人查看，不生成真实公网链接。'
+};
+
+const DEFAULT_CLOUD_SAVE_DRAFT = {
+  enabled: false,
+  status: 'local-only' as const,
+  conflictStrategy: 'keep-local' as const,
+  endpointDraft: '',
+  note: '云保存接口草案仅保存配置，不发起真实网络请求。'
 };
 
 const DEFAULT_AI_DESIGN_DRAFT = {
@@ -341,7 +358,19 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
     ...(design.exportDraftSettings ?? {})
   },
   collaborationDraft: design.collaborationDraft ?? DEFAULT_COLLABORATION_DRAFT,
-  mobileCaptureDraft: design.mobileCaptureDraft ?? DEFAULT_MOBILE_CAPTURE_DRAFT,
+  mobileCaptureDraft: {
+    ...DEFAULT_MOBILE_CAPTURE_DRAFT,
+    ...(design.mobileCaptureDraft ?? {}),
+    imports: design.mobileCaptureDraft?.imports ?? []
+  },
+  sharePackageDraft: {
+    ...DEFAULT_SHARE_PACKAGE_DRAFT,
+    ...(design.sharePackageDraft ?? {})
+  },
+  cloudSaveDraft: {
+    ...DEFAULT_CLOUD_SAVE_DRAFT,
+    ...(design.cloudSaveDraft ?? {})
+  },
   aiDesignDraft: design.aiDesignDraft ?? DEFAULT_AI_DESIGN_DRAFT,
   modelExportDraft: design.modelExportDraft ?? DEFAULT_MODEL_EXPORT_DRAFT
 });

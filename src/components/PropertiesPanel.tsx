@@ -10,6 +10,7 @@ import {
   RotateCw,
   Ruler,
   Trash2,
+  Upload,
   Wand2,
   X
 } from 'lucide-react';
@@ -54,6 +55,7 @@ type PropertiesPanelProps = {
   onWallDrawModeChange: (mode: WallDrawMode) => void;
   onToggleWallLengths: () => void;
   onExportJson: () => void;
+  onExportSharePackage: () => void;
   onExportSvg: () => void;
   onExportEstimateCsv: () => void;
   onExportHtmlReport: () => void;
@@ -62,6 +64,7 @@ type PropertiesPanelProps = {
   onExportDxfDraft: () => void;
   onExportGlbDraft: () => void;
   onExportObjDraft: () => void;
+  onMobileCaptureImport: (file: File) => void;
   onStartCalibration: () => void;
   onRecognizeFloorplan: () => void;
   onRecognizeSelectedArea: () => void;
@@ -150,6 +153,7 @@ export default function PropertiesPanel({
   onWallDrawModeChange,
   onToggleWallLengths,
   onExportJson,
+  onExportSharePackage,
   onExportSvg,
   onExportEstimateCsv,
   onExportHtmlReport,
@@ -158,6 +162,7 @@ export default function PropertiesPanel({
   onExportDxfDraft,
   onExportGlbDraft,
   onExportObjDraft,
+  onMobileCaptureImport,
   onStartCalibration,
   onRecognizeFloorplan,
   onRecognizeSelectedArea,
@@ -368,6 +373,12 @@ export default function PropertiesPanel({
               onExportObjDraft={onExportObjDraft}
             />
             <PrintExportSettingsPanel design={design} onChange={onChange} />
+            <MobileCloudDraftPanel
+              design={design}
+              onChange={onChange}
+              onMobileCaptureImport={onMobileCaptureImport}
+              onExportSharePackage={onExportSharePackage}
+            />
             <EstimatePanel
               design={design}
               onChange={onChange}
@@ -1358,6 +1369,176 @@ function PrintExportSettingsPanel({
         </select>
       </label>
       <div className="editing-hint">{draftSettings.draftNotice}</div>
+    </div>
+  );
+}
+
+function MobileCloudDraftPanel({
+  design,
+  onChange,
+  onMobileCaptureImport,
+  onExportSharePackage
+}: {
+  design: DesignDocument;
+  onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
+  onMobileCaptureImport: (file: File) => void;
+  onExportSharePackage: () => void;
+}) {
+  const mobileDraft = design.mobileCaptureDraft ?? { enabled: false, source: 'manual' as const, note: '', imports: [] };
+  const shareDraft = design.sharePackageDraft ?? {
+    enabled: true,
+    includePlanImage: true,
+    includeJson: true,
+    includeBudget: true,
+    note: ''
+  };
+  const cloudDraft = design.cloudSaveDraft ?? {
+    enabled: false,
+    status: 'local-only' as const,
+    conflictStrategy: 'keep-local' as const,
+    endpointDraft: '',
+    note: ''
+  };
+
+  return (
+    <div className="property-stack mobile-cloud-stack">
+      <h2>
+        <Package size={16} />
+        移动与分享
+      </h2>
+      <label className="upload-button mobile-import-button">
+        <Upload size={16} />
+        <span>导入手机采集 JSON</span>
+        <input
+          type="file"
+          accept="application/json,.json"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+
+            if (file) {
+              onMobileCaptureImport(file);
+              event.target.value = '';
+            }
+          }}
+        />
+      </label>
+      <div className="delivery-grid">
+        <span>采集记录</span>
+        <strong>{mobileDraft.imports.length} 条</strong>
+        <span>最近来源</span>
+        <strong>{mobileDraft.imports[0]?.source ?? mobileDraft.source}</strong>
+        <span>照片数量</span>
+        <strong>{mobileDraft.imports.reduce((total, item) => total + item.photoCount, 0)} 张</strong>
+      </div>
+      <label>
+        <span>采集备注</span>
+        <input
+          value={mobileDraft.note}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              mobileCaptureDraft: {
+                ...(current.mobileCaptureDraft ?? mobileDraft),
+                note: event.target.value
+              }
+            }))
+          }
+        />
+      </label>
+      <div className="candidate-filter-grid">
+        {[
+          ['includePlanImage', '包含平面图'],
+          ['includeJson', '包含 JSON'],
+          ['includeBudget', '包含预算']
+        ].map(([key, label]) => (
+          <label className="checkbox-row compact" key={key}>
+            <input
+              type="checkbox"
+              checked={Boolean(shareDraft[key as keyof typeof shareDraft])}
+              onChange={(event) =>
+                onChange((current) => ({
+                  ...current,
+                  sharePackageDraft: {
+                    ...(current.sharePackageDraft ?? shareDraft),
+                    [key]: event.target.checked
+                  }
+                }))
+              }
+            />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <button className="secondary-button" type="button" onClick={onExportSharePackage}>
+        导出本地分享包
+      </button>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={cloudDraft.enabled}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              cloudSaveDraft: {
+                ...(current.cloudSaveDraft ?? cloudDraft),
+                enabled: event.target.checked,
+                status: event.target.checked ? 'draft' : 'local-only'
+              }
+            }))
+          }
+        />
+        <span>启用云保存草案</span>
+      </label>
+      <label>
+        <span>云端项目 ID 草案</span>
+        <input
+          value={cloudDraft.projectId ?? ''}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              cloudSaveDraft: {
+                ...(current.cloudSaveDraft ?? cloudDraft),
+                projectId: event.target.value
+              }
+            }))
+          }
+        />
+      </label>
+      <label>
+        <span>接口地址草案</span>
+        <input
+          value={cloudDraft.endpointDraft ?? ''}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              cloudSaveDraft: {
+                ...(current.cloudSaveDraft ?? cloudDraft),
+                endpointDraft: event.target.value
+              }
+            }))
+          }
+        />
+      </label>
+      <label>
+        <span>冲突策略</span>
+        <select
+          value={cloudDraft.conflictStrategy}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              cloudSaveDraft: {
+                ...(current.cloudSaveDraft ?? cloudDraft),
+                conflictStrategy: event.target.value as 'keep-local' | 'keep-cloud' | 'manual'
+              }
+            }))
+          }
+        >
+          <option value="keep-local">保留本地</option>
+          <option value="keep-cloud">保留云端</option>
+          <option value="manual">手动处理</option>
+        </select>
+      </label>
+      <div className="editing-hint">{cloudDraft.note || '云保存草案仅保存配置，不发起真实网络请求。'}</div>
     </div>
   );
 }

@@ -233,6 +233,68 @@ export const createDeliveryHtml = (
 </html>`;
 };
 
+export const createSharePackageHtml = (design: DesignDocument, planImage: string, svgPlan: string) => {
+  const items = createEstimateItems(design);
+  const total = getEstimateTotal(items);
+  const shareSettings = design.sharePackageDraft;
+  const mobileImports = design.mobileCaptureDraft?.imports ?? [];
+  const jsonBlock = shareSettings?.includeJson ? JSON.stringify(design, null, 2) : '';
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeXml(design.name)} 分享包</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f5f7f4; }
+    main { max-width: 1120px; margin: 0 auto; padding: 28px; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    h2 { margin: 24px 0 10px; font-size: 17px; }
+    .meta { color: #5d6874; margin-bottom: 18px; }
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .card { background: #fff; border: 1px solid #dfe6e1; border-radius: 8px; padding: 12px; }
+    .card strong { display: block; font-size: 20px; margin-top: 5px; }
+    .plan { background: #fff; border: 1px solid #dfe6e1; border-radius: 8px; padding: 10px; }
+    .plan img, .plan svg { display: block; max-width: 100%; max-height: 760px; margin: 0 auto; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dfe6e1; }
+    th, td { padding: 9px 11px; border-bottom: 1px solid #edf1ee; text-align: left; font-size: 13px; }
+    th { background: #eef4f0; }
+    pre { overflow: auto; max-height: 460px; border: 1px solid #dfe6e1; border-radius: 8px; padding: 12px; background: #111827; color: #e5e7eb; }
+    .notice { border-left: 4px solid #2f88c5; background: #eef7fb; padding: 10px 12px; color: #36586c; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeXml(design.name)} 分享包</h1>
+    <div class="meta">生成时间：${escapeXml(new Date().toLocaleString('zh-CN'))} · 本地分享包，不包含真实公网链接。</div>
+    <section class="summary">
+      <div class="card">墙体<strong>${design.walls.length}</strong></div>
+      <div class="card">家具<strong>${design.furniture.length}</strong></div>
+      <div class="card">房屋面积<strong>${design.homeAreaSqm ? design.homeAreaSqm.toFixed(1) + '㎡' : '未填写'}</strong></div>
+      <div class="card">预算<strong>${formatCurrency(total)}</strong></div>
+    </section>
+    <h2>平面图</h2>
+    <section class="plan">${shareSettings?.includePlanImage && planImage ? `<img src="${planImage}" alt="平面图" />` : svgPlan}</section>
+    ${
+      shareSettings?.includeBudget
+        ? `<h2>预算摘要</h2><p class="notice">预算合计：${formatCurrency(total)}，项目数量：${items.length}。</p>`
+        : ''
+    }
+    <h2>移动采集导入</h2>
+    <table><thead><tr><th>来源</th><th>文件</th><th>房间</th><th>墙体</th><th>照片</th><th>备注</th></tr></thead><tbody>${
+      mobileImports
+        .map(
+          (item) =>
+            `<tr><td>${escapeXml(item.source)}</td><td>${escapeXml(item.fileName)}</td><td>${item.roomCount}</td><td>${item.wallCount}</td><td>${item.photoCount}</td><td>${escapeXml(item.note)}</td></tr>`
+        )
+        .join('') || '<tr><td colspan="6">暂无移动采集导入记录</td></tr>'
+    }</tbody></table>
+    ${jsonBlock ? `<h2>方案 JSON</h2><pre>${escapeXml(jsonBlock)}</pre>` : ''}
+  </main>
+</body>
+</html>`;
+};
+
 export const createDxfDraft = (design: DesignDocument, settings: ExportDraftSettings) => {
   const unitScale = settings.dxfUnit === 'millimeter' ? (1000 / design.canvas.scalePxPerMeter) : (1 / design.canvas.scalePxPerMeter);
   const lines = [

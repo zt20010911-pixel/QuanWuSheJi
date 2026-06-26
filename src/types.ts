@@ -18,7 +18,7 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 14;
+export const DESIGN_DOCUMENT_VERSION = 15;
 
 export type Selection =
   | { type: 'wall'; id: string }
@@ -593,21 +593,67 @@ export type ExportHistoryEntry = {
     | 'print-layout'
     | 'dxf-draft'
     | 'glb-draft'
-    | 'obj-draft';
+    | 'obj-draft'
+    | 'share-package';
   fileName: string;
   createdAt: string;
 };
 
+export type MobileCaptureImportSource = 'lidar' | 'ar' | 'photo' | 'manual' | 'magicplan-draft' | 'phone-json';
+
+export type MobileCapturePhoto = {
+  id: string;
+  fileName: string;
+  dataUrl: string;
+  note?: string;
+};
+
+export type MobileCaptureImport = {
+  id: string;
+  source: MobileCaptureImportSource;
+  fileName: string;
+  importedAt: string;
+  roomCount: number;
+  wallCount: number;
+  photoCount: number;
+  note: string;
+  rawData: unknown;
+  photos: MobileCapturePhoto[];
+};
+
 export type MobileCaptureDraft = {
   enabled: boolean;
-  source: 'lidar' | 'ar' | 'photo' | 'manual';
+  source: MobileCaptureImportSource;
   note: string;
+  imports: MobileCaptureImport[];
 };
 
 export type CollaborationDraft = {
   enabled: boolean;
   shareId?: string;
   role: 'owner' | 'viewer' | 'editor';
+  note: string;
+};
+
+export type SharePackageDraft = {
+  enabled: boolean;
+  shareId?: string;
+  lastExportedAt?: string;
+  includePlanImage: boolean;
+  includeJson: boolean;
+  includeBudget: boolean;
+  note: string;
+};
+
+export type CloudSaveStatus = 'local-only' | 'draft' | 'queued' | 'synced' | 'conflict';
+
+export type CloudSaveDraft = {
+  enabled: boolean;
+  projectId?: string;
+  status: CloudSaveStatus;
+  lastSyncedAt?: string;
+  conflictStrategy: 'keep-local' | 'keep-cloud' | 'manual';
+  endpointDraft?: string;
   note: string;
 };
 
@@ -649,6 +695,8 @@ export type DesignDocument = {
   exportDraftSettings?: ExportDraftSettings;
   collaborationDraft?: CollaborationDraft;
   mobileCaptureDraft?: MobileCaptureDraft;
+  sharePackageDraft?: SharePackageDraft;
+  cloudSaveDraft?: CloudSaveDraft;
   aiDesignDraft?: AiDesignDraft;
   modelExportDraft?: ModelExportDraft;
   importedModelAssets?: ImportedModelAsset[];

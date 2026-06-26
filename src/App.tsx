@@ -22,6 +22,8 @@ import type {
   ImportedModelAsset,
   ImportedModelFormat,
   MaterialBrushState,
+  MobileCaptureImport,
+  MobileCaptureImportSource,
   Point,
   RecognitionAttemptSnapshot,
   RecognitionCropBox,
@@ -42,7 +44,7 @@ import type {
   WalkthroughPath
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
-import { createDeliveryHtml, createDxfDraft, createModelDraft, createPlanSvg } from './utils/designExport';
+import { createDeliveryHtml, createDxfDraft, createModelDraft, createPlanSvg, createSharePackageHtml } from './utils/designExport';
 import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId, snapPoint } from './utils/geometry';
 import {
@@ -81,6 +83,22 @@ const getImportedModelFormat = (fileName: string): ImportedModelFormat | null =>
   }
 
   return null;
+};
+
+const readFileAsText = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file, 'utf-8');
+  });
+
+const getMobileCaptureSource = (value: unknown): MobileCaptureImportSource => {
+  if (value === 'lidar' || value === 'ar' || value === 'photo' || value === 'manual' || value === 'magicplan-draft') {
+    return value;
+  }
+
+  return 'phone-json';
 };
 
 const loadImageElement = (dataUrl: string) =>
@@ -1047,6 +1065,17 @@ export default function App() {
     setStatusText('已导出方案 JSON');
   };
 
+  const exportSharePackage = () => {
+    const fileName = `${design.name || '全屋设计'}-本地分享包.html`;
+    const snapshot = createExportSnapshot('share-package', fileName);
+    const planImage = getPlanDataUrl();
+    const svg = createPlanSvg(snapshot, getSvgExportOptions(snapshot, snapshot.printSettings?.showBackground));
+    const html = createSharePackageHtml(snapshot, planImage, svg);
+
+    downloadBlob(html, 'text/html;charset=utf-8', fileName);
+    setStatusText('已导出本地分享包 HTML');
+  };
+
   const exportEstimateCsv = () => {
     const fileName = `${design.name || '全屋设计'}-预算清单.csv`;
     const snapshot = createExportSnapshot('csv-estimate', fileName);
@@ -1418,6 +1447,50 @@ export default function App() {
         )
       }));
       setStatusText('已删除模型资源，相关家具已恢复为程序化体块');
+    },
+    [commitChange]
+  );
+
+  const handleMobileCaptureImport = useCallback(
+    async (file: File) => {
+      try {
+        const text = await readFileAsText(file);
+        const rawData = JSON.parse(text);
+        const record: MobileCaptureImport = {
+          id: createId('mobile-capture'),
+          source: getMobileCaptureSource(rawData.source),
+          fileName: file.name,
+          importedAt: new Date().toISOString(),
+          roomCount: Array.isArray(rawData.rooms) ? rawData.rooms.length : 0,
+          wallCount: Array.isArray(rawData.walls) ? rawData.walls.length : 0,
+          photoCount: Array.isArray(rawData.photos) ? rawData.photos.length : 0,
+          note: typeof rawData.note === 'string' ? rawData.note : '手机采集 JSON 草案',
+          rawData,
+          photos: Array.isArray(rawData.photos)
+            ? rawData.photos
+                .filter((photo: { dataUrl?: unknown; fileName?: unknown }) => typeof photo.dataUrl === 'string')
+                .map((photo: { dataUrl: string; fileName?: string; note?: string }, index: number) => ({
+                  id: createId('mobile-photo'),
+                  fileName: photo.fileName || `采集照片 ${index + 1}`,
+                  dataUrl: photo.dataUrl,
+                  note: photo.note
+                }))
+            : []
+        };
+
+        commitChange((current) => ({
+          ...current,
+          mobileCaptureDraft: {
+            ...(current.mobileCaptureDraft ?? { enabled: true, source: 'phone-json', note: '', imports: [] }),
+            enabled: true,
+            source: record.source,
+            imports: [record, ...(current.mobileCaptureDraft?.imports ?? [])]
+          }
+        }));
+        setStatusText(`已导入移动采集数据 ${file.name}`);
+      } catch {
+        setStatusText('移动采集 JSON 解析失败，请检查文件格式');
+      }
     },
     [commitChange]
   );
@@ -2330,6 +2403,7 @@ export default function App() {
           onWallDrawModeChange={changeWallDrawMode}
           onToggleWallLengths={toggleWallLengths}
           onExportJson={exportJson}
+          onExportSharePackage={exportSharePackage}
           onExportSvg={exportSvgPlan}
           onExportEstimateCsv={exportEstimateCsv}
           onExportHtmlReport={exportHtmlReport}
@@ -2338,6 +2412,7 @@ export default function App() {
           onExportDxfDraft={exportDxfDraft}
           onExportGlbDraft={() => exportModelDraft('glb')}
           onExportObjDraft={() => exportModelDraft('obj')}
+          onMobileCaptureImport={handleMobileCaptureImport}
           onStartCalibration={startCalibration}
           onRecognizeFloorplan={recognizeFloorplan}
           onRecognizeSelectedArea={recognizeSelectedArea}

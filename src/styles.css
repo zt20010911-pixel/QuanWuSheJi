@@ -598,6 +598,14 @@ button:disabled {
   color: #263041;
 }
 
+.mobile-cloud-stack .upload-button {
+  margin-bottom: 0;
+}
+
+.mobile-cloud-stack .secondary-button {
+  width: 100%;
+}
+
 .furniture-combo-item {
   border-style: dashed;
   background: #fbf8f1;
