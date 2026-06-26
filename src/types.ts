@@ -18,7 +18,7 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 13;
+export const DESIGN_DOCUMENT_VERSION = 14;
 
 export type Selection =
   | { type: 'wall'; id: string }
@@ -73,6 +73,8 @@ export type FurnitureProductInfo = {
   referencePrice?: number;
   productUrl?: string;
   imageUrl?: string;
+  supplierNote?: string;
+  modelSource?: 'local-upload' | 'catalog-draft' | 'manual';
   isRealProduct: boolean;
 };
 
@@ -106,6 +108,8 @@ export type FurnitureDefinition = {
   modelType?: FurnitureModelType;
   modelVariant?: string;
   product?: FurnitureProductInfo;
+  modelAssetId?: string;
+  modelTransform?: ModelAssetTransform;
   groupId?: string;
   groupName?: string;
   comboDefinitionId?: string;
@@ -137,6 +141,42 @@ export type FurnitureComboDefinition = {
   width: number;
   depth: number;
   items: FurnitureComboItem[];
+};
+
+export type ImportedModelFormat = 'glb' | 'gltf' | 'obj';
+
+export type ModelAssetTransform = {
+  scale: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  offsetY: number;
+};
+
+export type ImportedModelAsset = {
+  id: string;
+  name: string;
+  fileName: string;
+  format: ImportedModelFormat;
+  sizeBytes: number;
+  dataUrl: string;
+  category: string;
+  importedAt: string;
+  transform: ModelAssetTransform;
+};
+
+export type ProductCatalogItem = {
+  id: string;
+  name: string;
+  category: string;
+  brand?: string;
+  series?: string;
+  sku?: string;
+  referencePrice?: number;
+  productUrl?: string;
+  imageUrl?: string;
+  modelAssetId?: string;
+  note?: string;
 };
 
 export type MaterialBrushTarget = 'furniture' | 'floor' | 'wall' | 'ceiling';
@@ -611,6 +651,7 @@ export type DesignDocument = {
   mobileCaptureDraft?: MobileCaptureDraft;
   aiDesignDraft?: AiDesignDraft;
   modelExportDraft?: ModelExportDraft;
+  importedModelAssets?: ImportedModelAsset[];
   backgroundImage?: BackgroundImage;
   recognition?: RecognitionSession;
   renderSettings?: RenderSettings;

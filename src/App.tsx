@@ -19,6 +19,8 @@ import type {
   FurnitureComboDefinition,
   FurnitureDefinition,
   FurnitureInstance,
+  ImportedModelAsset,
+  ImportedModelFormat,
   MaterialBrushState,
   Point,
   RecognitionAttemptSnapshot,
@@ -46,6 +48,7 @@ import { createId, snapPoint } from './utils/geometry';
 import {
   DEFAULT_RECOGNITION_CANDIDATE_FILTERS,
   DEFAULT_RECOGNITION_WORKSPACE_STATE,
+  DEFAULT_MODEL_ASSET_TRANSFORM,
   normalizeDesign,
   normalizeFurnitureInstance,
   normalizeRecognitionWall
@@ -69,6 +72,16 @@ const readFileAsDataUrl = (file: File) =>
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+
+const getImportedModelFormat = (fileName: string): ImportedModelFormat | null => {
+  const extension = fileName.split('.').pop()?.toLowerCase();
+
+  if (extension === 'glb' || extension === 'gltf' || extension === 'obj') {
+    return extension;
+  }
+
+  return null;
+};
 
 const loadImageElement = (dataUrl: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
@@ -1299,6 +1312,116 @@ export default function App() {
     [commitChange, design.canvas.gridSize, design.canvas.scalePxPerMeter, getViewportCenterPoint]
   );
 
+  const handleModelAssetUpload = useCallback(
+    async (file: File) => {
+      const format = getImportedModelFormat(file.name);
+
+      if (!format) {
+        setStatusText('只支持上传 GLB、GLTF 或 OBJ 模型文件');
+        return;
+      }
+
+      const dataUrl = await readFileAsDataUrl(file);
+      const asset: ImportedModelAsset = {
+        id: createId('model-asset'),
+        name: file.name.replace(/\.(glb|gltf|obj)$/i, '') || '本地模型',
+        fileName: file.name,
+        format,
+        sizeBytes: file.size,
+        dataUrl,
+        category: '本地模型',
+        importedAt: new Date().toISOString(),
+        transform: DEFAULT_MODEL_ASSET_TRANSFORM
+      };
+
+      commitChange((current) => ({
+        ...current,
+        importedModelAssets: [asset, ...(current.importedModelAssets ?? [])]
+      }));
+      setActiveCategory('模型');
+      setStatusText(`已导入模型 ${asset.name}`);
+    },
+    [commitChange]
+  );
+
+  const addModelAssetToViewportCenter = useCallback(
+    (asset: ImportedModelAsset) => {
+      const position = getViewportCenterPoint();
+      const instanceId = createId('furniture');
+      const nextFurniture = normalizeFurnitureInstance(
+        {
+          id: `model-furniture-${asset.id}`,
+          category: asset.category || '模型',
+          subcategory: '本地模型',
+          name: asset.name,
+          width: 120,
+          depth: 120,
+          height: 1,
+          material: '本地模型',
+          materialId: 'wood-oak',
+          favorite: false,
+          recommendedRooms: [],
+          styleTags: ['本地模型'],
+          modelType: 'external-draft',
+          modelVariant: 'external-draft',
+          modelAssetId: asset.id,
+          modelTransform: asset.transform,
+          product: {
+            brand: '',
+            series: '',
+            sku: asset.fileName,
+            referencePrice: 0,
+            productUrl: '',
+            imageUrl: '',
+            supplierNote: '本地上传模型草案',
+            modelSource: 'local-upload',
+            isRealProduct: false
+          },
+          color: '#d9e5df',
+          accentColor: '#6c8f80',
+          shape: 'rect',
+          instanceId,
+          x: position.x,
+          y: position.y,
+          rotation: 0
+        },
+        [asset.id]
+      );
+
+      commitChange(
+        (current) => ({
+          ...current,
+          furniture: [...current.furniture, nextFurniture]
+        }),
+        { type: 'furniture', id: instanceId }
+      );
+      setMode('select');
+      setStatusText(`已添加模型家具 ${asset.name}`);
+    },
+    [commitChange, getViewportCenterPoint]
+  );
+
+  const deleteModelAsset = useCallback(
+    (assetId: string) => {
+      commitChange((current) => ({
+        ...current,
+        importedModelAssets: (current.importedModelAssets ?? []).filter((asset) => asset.id !== assetId),
+        furniture: current.furniture.map((item) =>
+          item.modelAssetId === assetId
+            ? {
+                ...item,
+                modelAssetId: undefined,
+                modelTransform: DEFAULT_MODEL_ASSET_TRANSFORM,
+                modelType: 'procedural'
+              }
+            : item
+        )
+      }));
+      setStatusText('已删除模型资源，相关家具已恢复为程序化体块');
+    },
+    [commitChange]
+  );
+
   const handleBackgroundUpload = async (file: File) => {
     resetWallDraft();
     const backgroundImage = await createBackgroundImage(file, design.canvas.width, design.canvas.height);
@@ -2100,6 +2223,7 @@ export default function App() {
           usedFurnitureIds={Array.from(new Set(design.furniture.map((item) => item.id)))}
           favoriteFurnitureIds={design.favoriteFurnitureIds ?? []}
           favoriteFurnitureComboIds={design.favoriteFurnitureComboIds ?? []}
+          importedModelAssets={design.importedModelAssets ?? []}
           recommendedRoomNames={[...design.rooms.map((room) => room.name), ...(design.roomZones ?? []).map((zone) => zone.name)]}
           onModeChange={(nextMode) => {
             setMode(nextMode);
@@ -2109,12 +2233,15 @@ export default function App() {
           onToggleWallLengths={toggleWallLengths}
           onApplyTemplate={applyTemplate}
           onBackgroundUpload={handleBackgroundUpload}
+          onModelAssetUpload={handleModelAssetUpload}
           onCategoryChange={setActiveCategory}
           onSearchChange={setSearchText}
           onFurnitureDragStart={handleFurnitureDragStart}
           onFurnitureComboDragStart={handleFurnitureComboDragStart}
           onFurnitureClick={addFurnitureToViewportCenter}
           onFurnitureComboClick={addFurnitureComboToViewportCenter}
+          onModelAssetClick={addModelAssetToViewportCenter}
+          onDeleteModelAsset={deleteModelAsset}
           onToggleFurnitureFavorite={toggleFurnitureFavorite}
           onToggleFurnitureComboFavorite={toggleFurnitureComboFavorite}
         />
@@ -2172,7 +2299,11 @@ export default function App() {
               onWallColorSample={handleWallColorSample}
             />
           ) : (
-            <ThreeDViewer ref={threeViewerRef} design={design} />
+            <ThreeDViewer
+              ref={threeViewerRef}
+              design={design}
+              onModelLoadError={(asset) => setStatusText(`模型草案未能加载：${asset.name}`)}
+            />
           )}
           {viewMode === 'plan' && selectedFurnitureItems.length > 0 && selectedFurnitureToolbarStyle && (
             <SelectedFurnitureToolbar

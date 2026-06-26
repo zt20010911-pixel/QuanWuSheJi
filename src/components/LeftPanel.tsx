@@ -15,7 +15,14 @@ import {
 import { FURNITURE_CATEGORIES, FURNITURE_LIBRARY } from '../data/furniture';
 import { FURNITURE_COMBOS, FURNITURE_MATERIAL_LIBRARY, resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { DESIGN_TEMPLATES } from '../data/templates';
-import type { DesignTemplate, FurnitureComboDefinition, FurnitureDefinition, ToolMode, WallDrawMode } from '../types';
+import type {
+  DesignTemplate,
+  FurnitureComboDefinition,
+  FurnitureDefinition,
+  ImportedModelAsset,
+  ToolMode,
+  WallDrawMode
+} from '../types';
 
 type LeftPanelProps = {
   mode: ToolMode;
@@ -26,18 +33,22 @@ type LeftPanelProps = {
   usedFurnitureIds: string[];
   favoriteFurnitureIds: string[];
   favoriteFurnitureComboIds: string[];
+  importedModelAssets: ImportedModelAsset[];
   recommendedRoomNames: string[];
   onModeChange: (mode: ToolMode) => void;
   onWallDrawModeChange: (mode: WallDrawMode) => void;
   onToggleWallLengths: () => void;
   onApplyTemplate: (template: DesignTemplate) => void;
   onBackgroundUpload: (file: File) => void;
+  onModelAssetUpload: (file: File) => void;
   onCategoryChange: (category: string) => void;
   onSearchChange: (value: string) => void;
   onFurnitureDragStart: (item: FurnitureDefinition) => void;
   onFurnitureComboDragStart: (item: FurnitureComboDefinition) => void;
   onFurnitureClick: (item: FurnitureDefinition) => void;
   onFurnitureComboClick: (item: FurnitureComboDefinition) => void;
+  onModelAssetClick: (asset: ImportedModelAsset) => void;
+  onDeleteModelAsset: (assetId: string) => void;
   onToggleFurnitureFavorite: (id: string) => void;
   onToggleFurnitureComboFavorite: (id: string) => void;
 };
@@ -108,18 +119,22 @@ export default function LeftPanel({
   usedFurnitureIds,
   favoriteFurnitureIds,
   favoriteFurnitureComboIds,
+  importedModelAssets,
   recommendedRoomNames,
   onModeChange,
   onWallDrawModeChange,
   onToggleWallLengths,
   onApplyTemplate,
   onBackgroundUpload,
+  onModelAssetUpload,
   onCategoryChange,
   onSearchChange,
   onFurnitureDragStart,
   onFurnitureComboDragStart,
   onFurnitureClick,
   onFurnitureComboClick,
+  onModelAssetClick,
+  onDeleteModelAsset,
   onToggleFurnitureFavorite,
   onToggleFurnitureComboFavorite
 }: LeftPanelProps) {
@@ -132,6 +147,7 @@ export default function LeftPanel({
       '收藏',
       '推荐',
       '组合',
+      '模型',
       ...styleOptions,
       ...materialOptions,
       ...FURNITURE_CATEGORIES.filter((category) => category !== '全部')
@@ -229,6 +245,25 @@ export default function LeftPanel({
             />
           </label>
         </div>
+        <div className="tool-group">
+          <span className="tool-group-title">模型</span>
+          <label className="upload-button model-upload-button">
+            <Upload size={17} />
+            <span>上传 GLB/OBJ</span>
+            <input
+              type="file"
+              accept=".glb,.gltf,.obj,model/gltf-binary,model/gltf+json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+
+                if (file) {
+                  onModelAssetUpload(file);
+                  event.target.value = '';
+                }
+              }}
+            />
+          </label>
+        </div>
         <div className="draw-options">
           <div className="draw-mode-toggle" aria-label="墙体绘制模式">
             <button
@@ -302,6 +337,50 @@ export default function LeftPanel({
           ))}
         </div>
         <div className="furniture-list">
+          {(activeCategory === '全部' || activeCategory === '模型') &&
+            importedModelAssets.map((asset) => (
+              <div
+                className="furniture-item model-asset-item"
+                key={asset.id}
+                role="button"
+                tabIndex={0}
+                title="点击添加模型家具到画布中心"
+                onClick={() => onModelAssetClick(asset)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) {
+                    return;
+                  }
+
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onModelAssetClick(asset);
+                  }
+                }}
+              >
+                <span className="furniture-swatch model-swatch">
+                  {asset.format.toUpperCase()}
+                </span>
+                <div>
+                  <strong>{asset.name}</strong>
+                  <small>
+                    模型 · {asset.format.toUpperCase()} · {(asset.sizeBytes / 1024).toFixed(1)}KB
+                  </small>
+                  <small>{asset.fileName}</small>
+                </div>
+                <button
+                  className="favorite-button danger-text"
+                  type="button"
+                  title="删除模型资源"
+                  aria-label="删除模型资源"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteModelAsset(asset.id);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           {filteredCombos.map((combo) => {
             const favorite = favoriteFurnitureComboIds.includes(combo.id);
 

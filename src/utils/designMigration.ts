@@ -4,6 +4,8 @@ import {
   type ExportDraftSettings,
   type FurnitureInstance,
   type FurnitureProductInfo,
+  type ImportedModelAsset,
+  type ModelAssetTransform,
   type ModelExportDraft,
   type PrintSettings,
   type RecognitionCandidateFilters,
@@ -74,6 +76,14 @@ export const DEFAULT_EXPORT_DRAFT_SETTINGS: ExportDraftSettings = {
   dxfUnit: 'millimeter',
   modelUnit: 'meter',
   draftNotice: '草案格式仅用于后续专业格式接入，不等同于正式 CAD/BIM 文件。'
+};
+
+export const DEFAULT_MODEL_ASSET_TRANSFORM: ModelAssetTransform = {
+  scale: 1,
+  rotationX: 0,
+  rotationY: 0,
+  rotationZ: 0,
+  offsetY: 0
 };
 
 const DEFAULT_RECOGNITION_QUALITY_REPORT: RecognitionQualityReport = {
@@ -151,12 +161,30 @@ const normalizeFurnitureProduct = (product?: Partial<FurnitureProductInfo>): Fur
   referencePrice: product?.referencePrice ?? 0,
   productUrl: product?.productUrl ?? '',
   imageUrl: product?.imageUrl ?? '',
+  supplierNote: product?.supplierNote ?? '',
+  modelSource: product?.modelSource ?? 'manual',
   isRealProduct: product?.isRealProduct ?? false
 });
 
-export const normalizeFurnitureInstance = (furniture: FurnitureInstance): FurnitureInstance => {
+const normalizeModelAssetTransform = (transform?: Partial<ModelAssetTransform>): ModelAssetTransform => ({
+  ...DEFAULT_MODEL_ASSET_TRANSFORM,
+  ...(transform ?? {})
+});
+
+const normalizeImportedModelAsset = (asset: ImportedModelAsset): ImportedModelAsset => ({
+  ...asset,
+  category: asset.category || '本地模型',
+  transform: normalizeModelAssetTransform(asset.transform)
+});
+
+export const normalizeFurnitureInstance = (
+  furniture: FurnitureInstance,
+  availableModelAssetIds: string[] = []
+): FurnitureInstance => {
   const materialId = furniture.materialId ?? getDefaultFurnitureMaterialId(furniture);
   const material = resolveFurnitureMaterial(materialId);
+  const modelAssetId =
+    furniture.modelAssetId && availableModelAssetIds.includes(furniture.modelAssetId) ? furniture.modelAssetId : undefined;
 
   return {
     ...furniture,
@@ -167,7 +195,9 @@ export const normalizeFurnitureInstance = (furniture: FurnitureInstance): Furnit
     favorite: furniture.favorite ?? false,
     subcategory: furniture.subcategory ?? furniture.category,
     styleTags: furniture.styleTags ?? getDefaultFurnitureStyleTags(furniture),
-    modelType: furniture.modelType ?? 'procedural',
+    modelType: modelAssetId ? 'external-draft' : furniture.modelType ?? 'procedural',
+    modelAssetId,
+    modelTransform: normalizeModelAssetTransform(furniture.modelTransform),
     modelVariant: furniture.modelVariant ?? furniture.shape,
     materialOverrides: furniture.materialOverrides ?? {},
     product: normalizeFurnitureProduct(furniture.product)
@@ -224,7 +254,13 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
     ...design.canvas,
     scalePxPerMeter: design.canvas.scalePxPerMeter || 80
   },
-  furniture: design.furniture.map(normalizeFurnitureInstance),
+  importedModelAssets: (design.importedModelAssets ?? []).map(normalizeImportedModelAsset),
+  furniture: design.furniture.map((item) =>
+    normalizeFurnitureInstance(
+      item,
+      (design.importedModelAssets ?? []).map((asset) => asset.id)
+    )
+  ),
   roomZones: (design.roomZones ?? []).map(normalizeRoomZone),
   recognition: design.recognition
     ? {

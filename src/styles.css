@@ -565,6 +565,39 @@ button:disabled {
   color: #a76d11;
 }
 
+.model-upload-button {
+  margin-bottom: 0;
+}
+
+.model-asset-item {
+  border-style: dashed;
+  background: #f7fbfa;
+}
+
+.model-swatch {
+  display: grid;
+  place-items: center;
+  border-color: #5b9d91;
+  background: #e7f4f0;
+  color: #176b61;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.model-binding-summary {
+  display: grid;
+  gap: 3px;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #edf5f2;
+  color: #536071;
+  font-size: 12px;
+}
+
+.model-binding-summary strong {
+  color: #263041;
+}
+
 .furniture-combo-item {
   border-style: dashed;
   background: #fbf8f1;

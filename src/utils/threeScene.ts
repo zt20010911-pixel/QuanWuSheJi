@@ -1,10 +1,14 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { resolveFurnitureMaterial } from '../data/furnitureMaterials';
 import { DEFAULT_ROOM_ZONE_MATERIAL_IDS, MATERIAL_LIBRARY } from '../data/materials';
 import type {
   DesignDocument,
   FurnitureInstance,
   FurnitureMaterialDefinition,
+  ImportedModelAsset,
+  ModelAssetTransform,
   Opening,
   Point,
   RenderSettings,
@@ -438,6 +442,14 @@ const getFurnitureHeightMeters = (furniture: FurnitureInstance) => {
   return 0.72;
 };
 
+const getDefaultModelTransform = (transform?: Partial<ModelAssetTransform>): ModelAssetTransform => ({
+  scale: transform?.scale ?? 1,
+  rotationX: transform?.rotationX ?? 0,
+  rotationY: transform?.rotationY ?? 0,
+  rotationZ: transform?.rotationZ ?? 0,
+  offsetY: transform?.offsetY ?? 0
+});
+
 const createFurnitureMaterial = (furniture: FurnitureInstance, settings: RenderSettings, color?: string) => {
   const material = resolveFurnitureMaterial(furniture.materialId);
 
@@ -579,12 +591,29 @@ const createFurnitureShape = (furniture: FurnitureInstance, settings: RenderSett
   return group;
 };
 
-const createFurnitureMesh = (furniture: FurnitureInstance, bounds: PlanBounds, scalePxPerMeter: number, settings: RenderSettings) => {
+const createFurnitureMesh = (
+  furniture: FurnitureInstance,
+  bounds: PlanBounds,
+  scalePxPerMeter: number,
+  settings: RenderSettings,
+  modelAsset?: ImportedModelAsset
+) => {
   const point = pointToWorld({ x: furniture.x, y: furniture.y }, bounds, scalePxPerMeter);
   const group = createFurnitureShape(furniture, settings);
 
   group.position.set(point.x, 0, point.z);
   group.rotation.y = -THREE.MathUtils.degToRad(furniture.rotation);
+
+  if (modelAsset) {
+    group.userData.importedModelBinding = {
+      asset: modelAsset,
+      width: furniture.width / 100,
+      depth: furniture.depth / 100,
+      height: getFurnitureHeightMeters(furniture),
+      transform: getDefaultModelTransform(furniture.modelTransform ?? modelAsset.transform)
+    };
+  }
+
   return group;
 };
 
@@ -638,15 +667,121 @@ export const buildThreeDesignScene = (design: DesignDocument) => {
 
   design.walls.forEach((wall) => group.add(createWallMesh(wall, bounds, design.canvas.scalePxPerMeter, settings)));
   design.openings.forEach((opening) => group.add(createOpeningMesh(opening, bounds, design)));
-  design.furniture.forEach((furniture) =>
-    group.add(createFurnitureMesh(furniture, bounds, design.canvas.scalePxPerMeter, settings))
-  );
+  design.furniture.forEach((furniture) => {
+    const modelAsset = (design.importedModelAssets ?? []).find((asset) => asset.id === furniture.modelAssetId);
+    group.add(createFurnitureMesh(furniture, bounds, design.canvas.scalePxPerMeter, settings, modelAsset));
+  });
 
   return {
     group,
     widthMeters: bounds.widthMeters,
     depthMeters: bounds.depthMeters
   };
+};
+
+const loadImportedModelObject = (asset: ImportedModelAsset) =>
+  new Promise<THREE.Object3D>((resolve, reject) => {
+    if (asset.format === 'glb' || asset.format === 'gltf') {
+      new GLTFLoader().load(
+        asset.dataUrl,
+        (gltf) => resolve(gltf.scene),
+        undefined,
+        reject
+      );
+      return;
+    }
+
+    new OBJLoader().load(asset.dataUrl, resolve, undefined, reject);
+  });
+
+const prepareImportedModelObject = (
+  object: THREE.Object3D,
+  sizeMeters: { width: number; depth: number; height: number },
+  transform: ModelAssetTransform
+) => {
+  const source = object.clone(true);
+
+  source.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+
+    if (mesh.isMesh) {
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+    }
+  });
+
+  const box = new THREE.Box3().setFromObject(source);
+  const sourceSize = box.getSize(new THREE.Vector3());
+
+  if (sourceSize.x <= 0 || sourceSize.y <= 0 || sourceSize.z <= 0) {
+    throw new Error('模型尺寸无效');
+  }
+
+  const center = box.getCenter(new THREE.Vector3());
+  source.position.sub(center);
+
+  const fitScale =
+    Math.min(sizeMeters.width / sourceSize.x, sizeMeters.depth / sourceSize.z, sizeMeters.height / sourceSize.y) *
+    transform.scale;
+  const container = new THREE.Group();
+
+  source.scale.setScalar(fitScale);
+  container.rotation.set(
+    THREE.MathUtils.degToRad(transform.rotationX),
+    THREE.MathUtils.degToRad(transform.rotationY),
+    THREE.MathUtils.degToRad(transform.rotationZ)
+  );
+  container.position.y = transform.offsetY + (sourceSize.y * fitScale) / 2;
+  container.add(source);
+  return container;
+};
+
+export const hydrateImportedModelMeshes = async (
+  root: THREE.Object3D,
+  onModelLoadError?: (asset: ImportedModelAsset, error: unknown) => void
+) => {
+  const targets: THREE.Object3D[] = [];
+
+  root.traverse((child) => {
+    if (child.userData.importedModelBinding) {
+      targets.push(child);
+    }
+  });
+
+  await Promise.all(
+    targets.map(async (target) => {
+      const binding = target.userData.importedModelBinding as {
+        asset: ImportedModelAsset;
+        width: number;
+        depth: number;
+        height: number;
+        transform: ModelAssetTransform;
+      };
+
+      try {
+        const object = await loadImportedModelObject(binding.asset);
+        const model = prepareImportedModelObject(
+          object,
+          {
+            width: binding.width,
+            depth: binding.depth,
+            height: binding.height
+          },
+          binding.transform
+        );
+
+        while (target.children.length > 0) {
+          const child = target.children[0];
+          disposeThreeObject(child);
+          target.remove(child);
+        }
+
+        target.add(model);
+      } catch (error) {
+        onModelLoadError?.(binding.asset, error);
+      }
+    })
+  );
 };
 
 export const disposeThreeObject = (object: THREE.Object3D) => {

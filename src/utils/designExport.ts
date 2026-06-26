@@ -165,8 +165,17 @@ export const createDeliveryHtml = (
     .join('');
   const furnitureRows = design.furniture
     .map(
-      (item) =>
-        `<tr><td>${escapeXml(item.name)}</td><td>${escapeXml(item.category)}</td><td>${escapeXml(item.material)}</td><td>${escapeXml(item.product?.brand)}</td><td>${item.product?.referencePrice ? formatCurrency(item.product.referencePrice) : '-'}</td></tr>`
+      (item) => {
+        const modelAsset = (design.importedModelAssets ?? []).find((asset) => asset.id === item.modelAssetId);
+        const image = item.product?.imageUrl
+          ? `<img class="product-thumb" src="${escapeXml(item.product.imageUrl)}" alt="${escapeXml(item.name)}" />`
+          : '-';
+        const link = item.product?.productUrl
+          ? `<a href="${escapeXml(item.product.productUrl)}" target="_blank" rel="noreferrer">查看链接</a>`
+          : '-';
+
+        return `<tr><td>${image}</td><td>${escapeXml(item.name)}</td><td>${escapeXml(item.category)}</td><td>${escapeXml(item.material)}</td><td>${escapeXml(item.product?.brand)}</td><td>${item.product?.referencePrice ? formatCurrency(item.product.referencePrice) : '-'}</td><td>${link}</td><td>${modelAsset ? escapeXml(modelAsset.name) : '程序化体块'}</td></tr>`;
+      }
     )
     .join('');
   const recognition = design.recognition;
@@ -196,6 +205,8 @@ export const createDeliveryHtml = (
     table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dfe6e1; }
     th, td { padding: 9px 11px; border-bottom: 1px solid #edf1ee; text-align: left; font-size: 13px; }
     th { background: #eef4f0; }
+    a { color: #176b8f; text-decoration: none; }
+    .product-thumb { width: 42px; height: 42px; object-fit: cover; border: 1px solid #dfe6e1; border-radius: 6px; background: #f5f7f4; }
     .total { text-align: right; font-size: 19px; font-weight: 700; }
     .notice { border-left: 4px solid #2f88c5; background: #eef7fb; padding: 10px 12px; color: #36586c; }
     @media print { body { background: #fff; } main { padding: 0; } .no-print { display: none; } }
@@ -214,7 +225,7 @@ export const createDeliveryHtml = (
     <table><thead><tr><th>房间</th><th>面积</th><th>来源</th></tr></thead><tbody>${roomZoneRows || '<tr><td colspan="3">尚未绘制房间区域</td></tr>'}</tbody></table>
     ${printSettings.showBudgetSummary ? `<h2>预算清单</h2><table><thead><tr><th>类别</th><th>房间</th><th>项目</th><th>数量</th><th>小计</th></tr></thead><tbody>${estimateRows || '<tr><td colspan="5">暂无预算项目</td></tr>'}</tbody></table><p class="total">预算合计：${formatCurrency(total)}</p>` : ''}
     <h2>家具商品清单</h2>
-    <table><thead><tr><th>名称</th><th>分类</th><th>材质</th><th>品牌</th><th>参考价</th></tr></thead><tbody>${furnitureRows || '<tr><td colspan="5">暂无家具</td></tr>'}</tbody></table>
+    <table><thead><tr><th>图片</th><th>名称</th><th>分类</th><th>材质</th><th>品牌</th><th>参考价</th><th>链接</th><th>3D 模型</th></tr></thead><tbody>${furnitureRows || '<tr><td colspan="8">暂无家具</td></tr>'}</tbody></table>
     <h2>识别质量摘要</h2>
     ${recognitionSummary}
   </main>
@@ -260,6 +271,16 @@ export const createModelDraft = (design: DesignDocument, format: 'glb' | 'obj', 
       unit: settings.modelUnit,
       designId: design.id,
       name: design.name,
+      importedModelAssets: (design.importedModelAssets ?? []).map((asset) => ({
+        id: asset.id,
+        name: asset.name,
+        fileName: asset.fileName,
+        format: asset.format,
+        sizeBytes: asset.sizeBytes,
+        category: asset.category,
+        transform: asset.transform,
+        hasEmbeddedDataUrl: Boolean(asset.dataUrl)
+      })),
       walls: design.walls.map((wall) => ({
         start: {
           x: pxToMeters(wall.start.x, design.canvas.scalePxPerMeter),
@@ -281,7 +302,10 @@ export const createModelDraft = (design: DesignDocument, format: 'glb' | 'obj', 
         width: item.width / 100,
         depth: item.depth / 100,
         height: item.height ?? 0.45,
-        materialId: item.materialId
+        materialId: item.materialId,
+        modelAssetId: item.modelAssetId,
+        modelTransform: item.modelTransform,
+        product: item.product
       }))
     },
     null,

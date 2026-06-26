@@ -1,9 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { CameraViewpoint, DesignDocument, RenderSettings, ThreeVector, WalkthroughPath } from '../types';
+import type { CameraViewpoint, DesignDocument, ImportedModelAsset, RenderSettings, ThreeVector, WalkthroughPath } from '../types';
 import { DEFAULT_RENDER_SETTINGS } from '../utils/designMigration';
-import { buildThreeDesignScene, disposeThreeObject, RENDER_ENVIRONMENT_PRESETS } from '../utils/threeScene';
+import {
+  buildThreeDesignScene,
+  disposeThreeObject,
+  hydrateImportedModelMeshes,
+  RENDER_ENVIRONMENT_PRESETS
+} from '../utils/threeScene';
 
 export type ThreeDViewerHandle = {
   exportPng: () => void;
@@ -13,6 +18,7 @@ export type ThreeDViewerHandle = {
 
 type ThreeDViewerProps = {
   design: DesignDocument;
+  onModelLoadError?: (asset: ImportedModelAsset) => void;
 };
 
 const downloadDataUrl = (dataUrl: string, fileName: string) => {
@@ -131,7 +137,7 @@ const applyShadowCamera = (sunLight: THREE.DirectionalLight, span: number, setti
   shadowCamera.updateProjectionMatrix();
 };
 
-export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeDViewer({ design }, ref) {
+export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeDViewer({ design, onModelLoadError }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -141,6 +147,7 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
   const ambientLightRef = useRef<THREE.HemisphereLight | null>(null);
   const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
   const walkthroughFrameRef = useRef<number | null>(null);
+  const hydrationTokenRef = useRef<symbol | null>(null);
 
   const cancelWalkthrough = () => {
     if (walkthroughFrameRef.current !== null) {
@@ -363,13 +370,20 @@ export default forwardRef<ThreeDViewerHandle, ThreeDViewerProps>(function ThreeD
     const { group, widthMeters, depthMeters } = buildThreeDesignScene(design);
     designGroupRef.current = group;
     scene.add(group);
+    const hydrationToken = Symbol('model-hydration');
+    hydrationTokenRef.current = hydrationToken;
+    hydrateImportedModelMeshes(group, (asset) => {
+      if (hydrationTokenRef.current === hydrationToken) {
+        onModelLoadError?.(asset);
+      }
+    });
 
     const span = Math.max(widthMeters, depthMeters, 4);
     const settings = resolveRenderSettings(design);
     applyEnvironment(scene, ambientLight, sunLight, settings);
     applyShadowCamera(sunLight, span, settings);
     applyCameraPreset(camera, controls, span, settings);
-  }, [design]);
+  }, [design, onModelLoadError]);
 
   return <div className="three-viewer" ref={containerRef} />;
 });

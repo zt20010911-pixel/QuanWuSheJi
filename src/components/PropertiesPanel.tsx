@@ -342,7 +342,7 @@ export default function PropertiesPanel({
             )}
             {selectedWall && <WallEditor design={design} wall={selectedWall} onChange={onChange} onDelete={onDelete} />}
             {selectedOpening && <OpeningEditor opening={selectedOpening} onChange={onChange} onDelete={onDelete} />}
-            {selectedFurniture && <FurnitureEditor furniture={selectedFurniture} onChange={onChange} onDelete={onDelete} />}
+            {selectedFurniture && <FurnitureEditor design={design} furniture={selectedFurniture} onChange={onChange} onDelete={onDelete} />}
             {selectedFurnitureGroup.length > 0 && (
               <FurnitureGroupEditor groupItems={selectedFurnitureGroup} design={design} onChange={onChange} onDelete={onDelete} />
             )}
@@ -2349,14 +2349,49 @@ function FurnitureGroupEditor({
 }
 
 function FurnitureEditor({
+  design,
   furniture,
   onChange,
   onDelete
 }: {
+  design: DesignDocument;
   furniture: FurnitureInstance;
   onChange: (updater: (current: DesignDocument) => DesignDocument) => void;
   onDelete: () => void;
 }) {
+  const importedModelAssets = design.importedModelAssets ?? [];
+  const selectedModel = importedModelAssets.find((asset) => asset.id === furniture.modelAssetId);
+  const modelTransform = furniture.modelTransform ?? selectedModel?.transform ?? {
+    scale: 1,
+    rotationX: 0,
+    rotationY: 0,
+    rotationZ: 0,
+    offsetY: 0
+  };
+  const updateFurniture = (patch: Partial<FurnitureInstance>) => {
+    onChange((current) => ({
+      ...current,
+      furniture: current.furniture.map((item) => (item.instanceId === furniture.instanceId ? { ...item, ...patch } : item))
+    }));
+  };
+  const updateProduct = (patch: Partial<NonNullable<FurnitureInstance['product']>>) => {
+    updateFurniture({
+      product: {
+        ...furniture.product,
+        isRealProduct: furniture.product?.isRealProduct ?? false,
+        ...patch
+      }
+    });
+  };
+  const updateModelTransform = (patch: Partial<typeof modelTransform>) => {
+    updateFurniture({
+      modelTransform: {
+        ...modelTransform,
+        ...patch
+      }
+    });
+  };
+
   return (
     <div className="property-stack">
       <h2>{furniture.name}</h2>
@@ -2449,6 +2484,92 @@ function FurnitureEditor({
           ))}
         </select>
       </label>
+      <div className="render-subpanel">
+        <div className="inline-title">3D 模型</div>
+        <label>
+          <span>绑定模型</span>
+          <select
+            value={furniture.modelAssetId ?? ''}
+            onChange={(event) => {
+              const modelAssetId = event.target.value || undefined;
+              const asset = importedModelAssets.find((item) => item.id === modelAssetId);
+
+              updateFurniture({
+                modelAssetId,
+                modelType: modelAssetId ? 'external-draft' : 'procedural',
+                modelTransform: asset?.transform ?? modelTransform,
+                product: {
+                  ...furniture.product,
+                  isRealProduct: furniture.product?.isRealProduct ?? false,
+                  modelSource: modelAssetId ? 'local-upload' : 'manual'
+                }
+              });
+            }}
+          >
+            <option value="">使用程序化体块</option>
+            {importedModelAssets.map((asset) => (
+              <option value={asset.id} key={asset.id}>
+                {asset.name} · {asset.format.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedModel && (
+          <div className="model-binding-summary">
+            <strong>{selectedModel.fileName}</strong>
+            <span>{(selectedModel.sizeBytes / 1024).toFixed(1)}KB · {selectedModel.category}</span>
+          </div>
+        )}
+        <div className="material-color-row">
+          <label>
+            <span>缩放</span>
+            <input
+              type="number"
+              min="0.05"
+              step="0.05"
+              value={modelTransform.scale}
+              onChange={(event) => updateModelTransform({ scale: numberValue(event.target.value) || 1 })}
+            />
+          </label>
+          <label>
+            <span>离地高度（米）</span>
+            <input
+              type="number"
+              step="0.05"
+              value={modelTransform.offsetY}
+              onChange={(event) => updateModelTransform({ offsetY: numberValue(event.target.value) })}
+            />
+          </label>
+        </div>
+        <div className="material-color-row">
+          <label>
+            <span>X 轴旋转</span>
+            <input
+              type="number"
+              step="5"
+              value={modelTransform.rotationX}
+              onChange={(event) => updateModelTransform({ rotationX: numberValue(event.target.value) })}
+            />
+          </label>
+          <label>
+            <span>Z 轴旋转</span>
+            <input
+              type="number"
+              step="5"
+              value={modelTransform.rotationZ}
+              onChange={(event) => updateModelTransform({ rotationZ: numberValue(event.target.value) })}
+            />
+          </label>
+        </div>
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={!furniture.modelAssetId}
+          onClick={() => updateFurniture({ modelAssetId: undefined, modelType: 'procedural' })}
+        >
+          清除绑定模型
+        </button>
+      </div>
       <label>
         <span>品牌</span>
         <input
@@ -2528,6 +2649,44 @@ function FurnitureEditor({
             }));
           }}
         />
+      </label>
+      <label>
+        <span>商品图片</span>
+        <input
+          value={furniture.product?.imageUrl ?? ''}
+          onChange={(event) => updateProduct({ imageUrl: event.target.value, isRealProduct: furniture.product?.isRealProduct ?? false })}
+        />
+      </label>
+      <label>
+        <span>供应商备注</span>
+        <input
+          value={furniture.product?.supplierNote ?? ''}
+          onChange={(event) => updateProduct({ supplierNote: event.target.value, isRealProduct: furniture.product?.isRealProduct ?? false })}
+        />
+      </label>
+      <label>
+        <span>模型来源</span>
+        <select
+          value={furniture.product?.modelSource ?? 'manual'}
+          onChange={(event) =>
+            updateProduct({
+              modelSource: event.target.value as NonNullable<FurnitureInstance['product']>['modelSource'],
+              isRealProduct: furniture.product?.isRealProduct ?? false
+            })
+          }
+        >
+          <option value="manual">手动录入</option>
+          <option value="local-upload">本地上传</option>
+          <option value="catalog-draft">商品库草案</option>
+        </select>
+      </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={Boolean(furniture.product?.isRealProduct)}
+          onChange={(event) => updateProduct({ isRealProduct: event.target.checked })}
+        />
+        <span>标记为真实商品</span>
       </label>
       <label className="checkbox-row">
         <input
