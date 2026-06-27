@@ -954,6 +954,23 @@ const clusterAxisValues = (values: number[], tolerance: number) => {
     .sort((left, right) => left - right);
 };
 
+const isNearExistingOpeningCandidate = (
+  candidates: RecognitionOpeningCandidate[],
+  candidate: Pick<RecognitionOpeningCandidate, 'x' | 'y' | 'rotation' | 'kind'>,
+  tolerance: number
+) =>
+  candidates.some(
+    (item) =>
+      item.kind === candidate.kind &&
+      Math.abs(item.rotation - candidate.rotation) <= 5 &&
+      Math.hypot(item.x - candidate.x, item.y - candidate.y) <= tolerance
+  );
+
+const isWallOnOuterFrame = (wall: Wall, bounds: ReturnType<typeof getWallBounds>, tolerance: number) =>
+  isHorizontalWall(wall)
+    ? Math.min(Math.abs(wall.start.y - bounds.top), Math.abs(wall.start.y - bounds.bottom)) <= tolerance
+    : Math.min(Math.abs(wall.start.x - bounds.left), Math.abs(wall.start.x - bounds.right)) <= tolerance;
+
 const createOpeningCandidates = (
   scanWalls: RecognizedFloorplanWall[],
   finalWalls: RecognizedFloorplanWall[],
@@ -1017,8 +1034,7 @@ const createOpeningCandidates = (
           0.9,
           Math.max(0.48, (current.confidence + next.confidence) / 2 - Math.abs(gapMeters - (kind === 'door' ? 0.9 : 1.35)) * 0.08)
         );
-
-        candidates.push({
+        const candidate: RecognitionOpeningCandidate = {
           id: createId('rec-opening'),
           kind,
           wallId: current.id,
@@ -1029,12 +1045,91 @@ const createOpeningCandidates = (
           status: 'active',
           confidence,
           source: 'gap'
-        });
+        };
+
+        if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.2, 28))) {
+          candidates.push(candidate);
+        }
       }
     });
   });
 
-  return candidates.slice(0, 28);
+  const outerFrameTolerance = Math.max(gridSize * 1.55, 42);
+  const endpointTolerance = Math.max(gridSize * 0.85, 18);
+  const outerWalls = finalWalls.filter((wall) => isWallOnOuterFrame(wall, bounds, outerFrameTolerance));
+
+  outerWalls.forEach((wall) => {
+    const length = getWallLength(wall);
+
+    if (length < scalePxPerMeter * 2.2 || (wall.confidence ?? 0) < 0.58) {
+      return;
+    }
+
+    const widthMeters = Math.max(0.9, Math.min(1.8, length / scalePxPerMeter * 0.32));
+    const candidate: RecognitionOpeningCandidate = {
+      id: createId('rec-opening-window'),
+      kind: 'window',
+      wallId: wall.id,
+      x: (wall.start.x + wall.end.x) / 2,
+      y: (wall.start.y + wall.end.y) / 2,
+      width: Math.round(widthMeters * 100),
+      rotation: isHorizontalWall(wall) ? 0 : 90,
+      status: 'active',
+      confidence: Math.min(0.66, Math.max(0.52, (wall.confidence ?? 0.6) - 0.08)),
+      source: 'gap'
+    };
+
+    if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 2.4, 72))) {
+      candidates.push(candidate);
+    }
+  });
+
+  finalWalls.forEach((wall) => {
+    if (isWallOnOuterFrame(wall, bounds, outerFrameTolerance) || getWallLength(wall) < scalePxPerMeter * 1.2 || (wall.confidence ?? 0) < 0.55) {
+      return;
+    }
+
+    [wall.start, wall.end].forEach((point) => {
+      const connected = finalWalls.some((item) => item.id !== wall.id && isPointNearWall(point, item, endpointTolerance));
+
+      if (connected) {
+        return;
+      }
+
+      const nearPerpendicular = finalWalls.some((item) => {
+        if (item.id === wall.id || isHorizontalWall(item) === isHorizontalWall(wall)) {
+          return false;
+        }
+
+        return isPointNearWall(point, item, Math.max(scalePxPerMeter * 0.9, gridSize * 2.2));
+      });
+
+      if (!nearPerpendicular) {
+        return;
+      }
+
+      const candidate: RecognitionOpeningCandidate = {
+        id: createId('rec-opening-door'),
+        kind: 'door',
+        wallId: wall.id,
+        x: point.x,
+        y: point.y,
+        width: 90,
+        rotation: isHorizontalWall(wall) ? 0 : 90,
+        status: 'active',
+        confidence: 0.56,
+        source: 'gap'
+      };
+
+      if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.6, 40))) {
+        candidates.push(candidate);
+      }
+    });
+  });
+
+  return candidates
+    .sort((left, right) => (right.confidence ?? 0) - (left.confidence ?? 0))
+    .slice(0, 36);
 };
 
 const createRoomCandidates = (
@@ -1050,6 +1145,7 @@ const createRoomCandidates = (
   const xLines = clusterAxisValues(verticalWalls.map(getWallLineCoordinate), lineTolerance);
   const yLines = clusterAxisValues(horizontalWalls.map(getWallLineCoordinate), lineTolerance);
   const candidates: RecognitionRoomCandidate[] = [];
+  const bounds = walls.length ? getWallBounds(walls) : null;
 
   for (let xIndex = 0; xIndex < xLines.length - 1; xIndex += 1) {
     for (let yIndex = 0; yIndex < yLines.length - 1; yIndex += 1) {
@@ -1099,6 +1195,79 @@ const createRoomCandidates = (
         confidence: Math.min(0.88, Math.max(0.45, averageCoverage)),
         source: 'graph'
       });
+    }
+  }
+
+  if (bounds) {
+    for (let xIndex = 0; xIndex < xLines.length - 1; xIndex += 1) {
+      for (let yIndex = 0; yIndex < yLines.length - 1; yIndex += 1) {
+        const left = xLines[xIndex];
+        const right = xLines[xIndex + 1];
+        const top = yLines[yIndex];
+        const bottom = yLines[yIndex + 1];
+        const width = right - left;
+        const height = bottom - top;
+
+        if (width < scalePxPerMeter * 1.1 || height < scalePxPerMeter * 0.7) {
+          continue;
+        }
+
+        const areaSqm = (width / scalePxPerMeter) * (height / scalePxPerMeter);
+
+        if (areaSqm < 2.0 || areaSqm > 14) {
+          continue;
+        }
+
+        const nearOuterFrame =
+          Math.min(Math.abs(top - bounds.top), Math.abs(bottom - bounds.bottom), Math.abs(left - bounds.left), Math.abs(right - bounds.right)) <=
+          Math.max(gridSize * 2.2, 60);
+
+        if (!nearOuterFrame) {
+          continue;
+        }
+
+        const topCoverage = getWallCoverageOnLine(walls, 'horizontal', top, left, right, lineTolerance) / width;
+        const bottomCoverage = getWallCoverageOnLine(walls, 'horizontal', bottom, left, right, lineTolerance) / width;
+        const leftCoverage = getWallCoverageOnLine(walls, 'vertical', left, top, bottom, lineTolerance) / height;
+        const rightCoverage = getWallCoverageOnLine(walls, 'vertical', right, top, bottom, lineTolerance) / height;
+        const coverageValues = [topCoverage, bottomCoverage, leftCoverage, rightCoverage];
+        const strongEdges = coverageValues.filter((coverage) => coverage >= 0.42).length;
+        const weakEdges = coverageValues.filter((coverage) => coverage < 0.32).length;
+        const averageCoverage = coverageValues.reduce((sum, coverage) => sum + coverage, 0) / coverageValues.length;
+        const overlapsExistingRoom = candidates.some((candidate) => {
+          const xs = candidate.points.map((point) => point.x);
+          const ys = candidate.points.map((point) => point.y);
+          const candidateLeft = Math.min(...xs);
+          const candidateRight = Math.max(...xs);
+          const candidateTop = Math.min(...ys);
+          const candidateBottom = Math.max(...ys);
+          const overlapWidth = Math.max(0, Math.min(candidateRight, right) - Math.max(candidateLeft, left));
+          const overlapHeight = Math.max(0, Math.min(candidateBottom, bottom) - Math.max(candidateTop, top));
+          return overlapWidth * overlapHeight > width * height * 0.55;
+        });
+
+        if (strongEdges < 2 || weakEdges === 0 || overlapsExistingRoom) {
+          continue;
+        }
+
+        const points: Point[] = [
+          { x: left, y: top },
+          { x: right, y: top },
+          { x: right, y: bottom },
+          { x: left, y: bottom }
+        ];
+
+        candidates.push({
+          id: createId('rec-balcony'),
+          name: `识别阳台 ${candidates.filter((candidate) => candidate.name?.includes('阳台')).length + 1}`,
+          points,
+          label: { x: (left + right) / 2, y: (top + bottom) / 2 },
+          areaSqm: Math.round(areaSqm * 10) / 10,
+          status: 'active',
+          confidence: Math.min(0.72, Math.max(0.46, averageCoverage + strongEdges * 0.06 - weakEdges * 0.04)),
+          source: 'graph'
+        });
+      }
     }
   }
 
