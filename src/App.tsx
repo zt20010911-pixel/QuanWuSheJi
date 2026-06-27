@@ -202,6 +202,8 @@ const getWallLength = (wall: Wall) => Math.hypot(wall.end.x - wall.start.x, wall
 
 const isHorizontalWall = (wall: Wall) => Math.abs(wall.start.y - wall.end.y) <= Math.abs(wall.start.x - wall.end.x);
 
+const isSafeRecognitionWall = (wall: RecognitionWall) => (wall.confidence ?? 1) >= 0.55;
+
 const createDefaultRecognitionCropBox = (backgroundImage: BackgroundImage): RecognitionCropBox => {
   const insetX = Math.round(backgroundImage.width * 0.06);
   const insetY = Math.round(backgroundImage.height * 0.06);
@@ -2038,6 +2040,8 @@ export default function App() {
 
   const promoteRecognitionWalls = (scope: 'selected' | 'all') => {
     const selectedIds = new Set(selectedRecognitionIds);
+    let promotedCount = 0;
+    let skippedLowConfidenceCount = 0;
 
     commitChange((current) => {
       if (!current.recognition) {
@@ -2045,13 +2049,19 @@ export default function App() {
       }
 
       const sourceWalls = current.recognition.walls.filter((wall) =>
-        wall.status === 'active' && (scope === 'all' || selectedIds.has(wall.id))
+        wall.status === 'active' &&
+        (scope === 'all' ? isSafeRecognitionWall(wall) : selectedIds.has(wall.id))
       );
+      skippedLowConfidenceCount =
+        scope === 'all'
+          ? current.recognition.walls.filter((wall) => wall.status === 'active' && !isSafeRecognitionWall(wall)).length
+          : 0;
 
       if (sourceWalls.length === 0) {
         return current;
       }
 
+      promotedCount = sourceWalls.length;
       const promotedPairs = sourceWalls.map((wall) => ({
         recognitionId: wall.id,
         wall: {
@@ -2086,7 +2096,18 @@ export default function App() {
         recognition
       };
     });
-    setStatusText(scope === 'all' ? '已将全部识别墙写入正式方案' : '已将选中识别墙写入正式方案');
+
+    if (promotedCount === 0) {
+      setStatusText(scope === 'all' ? '没有可安全批量写入的中高置信识别墙' : '请先选择要写入的识别墙');
+      return;
+    }
+
+    if (scope === 'all' && skippedLowConfidenceCount > 0) {
+      setStatusText(`已安全写入 ${promotedCount} 面识别墙，跳过 ${skippedLowConfidenceCount} 面低置信墙`);
+      return;
+    }
+
+    setStatusText(scope === 'all' ? `已安全写入 ${promotedCount} 面识别墙` : `已将 ${promotedCount} 面选中识别墙写入正式方案`);
   };
 
   const promoteRecognitionOpenings = (scope: 'selected' | 'all') => {

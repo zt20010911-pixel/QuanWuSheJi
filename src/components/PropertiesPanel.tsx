@@ -648,6 +648,8 @@ function RecognitionLayerEditor({
   const selectedRoomCount = recognitionLayer.selectedRoomCandidateIds?.length ?? 0;
   const selectedCount = selectedWallCount + selectedOpeningCount + selectedRoomCount;
   const inferredCount = recognitionLayer.walls.filter((wall) => wall.source === 'inferred').length;
+  const safeActiveWallCount = recognitionLayer.walls.filter((wall) => wall.status === 'active' && (wall.confidence ?? 1) >= 0.55).length;
+  const lowConfidenceActiveWallCount = recognitionLayer.walls.filter((wall) => wall.status === 'active' && (wall.confidence ?? 1) < 0.55).length;
   const profileLabels: Record<RecognitionProfile, string> = {
     balanced: '均衡',
     'wall-priority': '墙体优先',
@@ -710,6 +712,7 @@ function RecognitionLayerEditor({
           {recognitionLayer.parameters.bridgeWallCount ?? recognitionLayer.parameters.inferredWallCount ?? inferredCount} 面 / 提示{' '}
           {recognitionLayer.parameters.hintWallCount ?? qualityReport?.missingWallHintCount ?? 0} 个
         </span>
+        <span>安全写入 {safeActiveWallCount} 面 / 低置信需手选 {lowConfidenceActiveWallCount} 面</span>
       </div>
       <div className="property-button-row">
         <button className="secondary-button" type="button" onClick={onRecognizeAgain} disabled={recognizingFloorplan}>
@@ -724,10 +727,17 @@ function RecognitionLayerEditor({
         <button className="secondary-button" type="button" onClick={onApplyAllOuterGaps} disabled={activeOuterGapCount === 0}>
           补全建议
         </button>
-        <button className="primary-button" type="button" onClick={onPromoteAll} disabled={activeCount === 0}>
-          写入正式方案
+        <button className="primary-button" type="button" onClick={onPromoteAll} disabled={safeActiveWallCount === 0}>
+          安全写入墙体
         </button>
       </div>
+      {lowConfidenceActiveWallCount > 0 && (
+        <div className="recognition-quality">
+          <strong>批量写入护栏</strong>
+          <span>低置信墙不会被“安全写入墙体”批量写入。</span>
+          <span>确认它与底图吻合后，可手动选中再点“写入选中墙”。</span>
+        </div>
+      )}
       {qualityReport && (
         <div className="recognition-quality">
           <strong>识别质量</strong>

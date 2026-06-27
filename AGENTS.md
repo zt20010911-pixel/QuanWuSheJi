@@ -10,3 +10,5 @@
 8. 代码中不要使用 emoji。
 9. 输出使用中文。
 10. 在 `D:\AI\fangwu` 项目下进行网页或登录相关测试时，必须使用 Google Chrome 的 `韬` 配置文件。使用 Chrome 自动化时，优先选择 `metadata.profileName === "韬"` 的 Chrome Extension 后端，并接管已打开的 `http://127.0.0.1:5173/` 标签页；不要使用默认 Chrome 后端、隐藏浏览器或新建其他 Chrome 配置，除非用户明确同意。
+11. 在 `D:\AI\fangwu` 项目下，用户已允许打开 Google Chrome。需要网页验证、登录验证、冒烟测试或恢复 Chrome 控制时，可以直接打开 Chrome 的 `韬` 配置文件，不需要每次再次询问。
+12. 每次回复用户时，开头都加上“你好”。
