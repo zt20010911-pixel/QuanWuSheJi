@@ -28,6 +28,8 @@ type Run = {
   end: number;
 };
 
+type WallMaskMode = 'dark' | 'support';
+
 type RecognizeOptions = {
   gridSize: number;
   scalePxPerMeter: number;
@@ -54,6 +56,9 @@ export type FloorplanRecognitionResult = {
   rawWallCount: number;
   candidateWallCount: number;
   inferredWallCount: number;
+  scanWallCount: number;
+  bridgeWallCount: number;
+  hintWallCount: number;
   profile: RecognitionProfile;
   cropBox?: RecognitionCropBox;
   sampledWallColor?: RecognitionSampledWallColor;
@@ -142,6 +147,7 @@ const createWallMask = async (
   backgroundImage: BackgroundImage,
   mode: RecognitionMode,
   profile: RecognitionProfile,
+  maskMode: WallMaskMode,
   cropBox?: RecognitionCropBox,
   sampledWallColor?: RecognitionSampledWallColor
 ) => {
@@ -176,12 +182,14 @@ const createWallMask = async (
     const green = imageData.data[index + 1];
     const blue = imageData.data[index + 2];
     const alpha = imageData.data[index + 3];
-    const sampledPixel = profile !== 'clean' && isSampledWallPixel(red, green, blue, alpha, sampledWallColor);
+    const sampledPixel =
+      maskMode === 'support' &&
+      profile !== 'clean' &&
+      isSampledWallPixel(red, green, blue, alpha, sampledWallColor);
     const wallPixel =
-      sampledPixel ||
-      (mode === 'complete'
-        ? isStructuralWallPixel(red, green, blue, alpha)
-        : isDarkWallPixel(red, green, blue, alpha));
+      maskMode === 'dark'
+        ? isDarkWallPixel(red, green, blue, alpha)
+        : sampledPixel || (mode === 'complete' ? isStructuralWallPixel(red, green, blue, alpha) : isDarkWallPixel(red, green, blue, alpha));
 
     mask[pixelIndex] = wallPixel
       ? 1
@@ -659,8 +667,8 @@ const filterRecognizedWalls = (
 ) => {
   const threshold = mode === 'complete'
     ? profile === 'wall-priority'
-      ? 34
-      : 38
+      ? 46
+      : 50
     : profile === 'clean'
       ? 62
       : 58;
@@ -671,8 +679,8 @@ const filterRecognizedWalls = (
       const length = getWallLength(wall);
       const keepLongBoundary =
         mode === 'complete' &&
-        score >= (profile === 'wall-priority' ? 26 : 30) &&
-        length >= minWallLength * (profile === 'wall-priority' ? 0.96 : 1.18);
+        score >= (profile === 'wall-priority' ? 40 : 44) &&
+        length >= minWallLength * (profile === 'wall-priority' ? 1.18 : 1.35);
       return score >= threshold || keepLongBoundary;
     })
     .map(({ wall, score }) => toRecognizedWall(wall, score, 'scan'));
@@ -692,10 +700,18 @@ const createBridgeWalls = (
   profile: RecognitionProfile
 ) => {
   const bridgeWalls: RecognizedFloorplanWall[] = [];
-  const lineTolerance = Math.max(gridSize * 0.8, 16);
+  const lineTolerance = Math.max(gridSize * 0.55, 12);
   const maxGap = profile === 'wall-priority'
-    ? Math.max(gridSize * 8.5, minWallLength * 1.85)
-    : Math.max(gridSize * 5.5, minWallLength * 1.22);
+    ? Math.max(gridSize * 3.2, minWallLength * 0.82)
+    : Math.max(gridSize * 2.4, minWallLength * 0.62);
+  const supportTolerance = Math.max(gridSize * 0.72, 14);
+  const hasEndpointSupport = (wall: RecognizedFloorplanWall) =>
+    wall.confidence >= 0.55 &&
+    (
+      getWallLength(wall) >= minWallLength * 1.85 ||
+      countConnectedEndpoints(wall, walls, supportTolerance) > 0 ||
+      countPerpendicularIntersections(wall, walls, supportTolerance) > 0
+    );
 
   (['horizontal', 'vertical'] as const).forEach((orientation) => {
     const orientedWalls = walls
@@ -724,8 +740,13 @@ const createBridgeWalls = (
         const currentRange = getWallRange(current);
         const nextRange = getWallRange(next);
         const gap = nextRange.start - currentRange.end;
+        const shortestSegment = Math.min(getWallLength(current), getWallLength(next));
 
         if (gap <= 0 || gap > maxGap) {
+          continue;
+        }
+
+        if (gap > shortestSegment * 0.72 || !hasEndpointSupport(current) || !hasEndpointSupport(next)) {
           continue;
         }
 
@@ -733,7 +754,7 @@ const createBridgeWalls = (
         const start = snapValue(currentRange.end, gridSize);
         const end = snapValue(nextRange.start, gridSize);
         const thickness = Math.round((current.thickness + next.thickness) / 2);
-        const confidence = Math.min(0.76, Math.max(0.46, (current.confidence + next.confidence) / 2 - gap / maxGap * 0.18));
+        const confidence = Math.min(0.68, Math.max(0.5, (current.confidence + next.confidence) / 2 - gap / maxGap * 0.22));
 
         bridgeWalls.push(
           orientation === 'horizontal'
@@ -1342,7 +1363,7 @@ export const recognizeFloorplanWalls = async (
     : options.sampledWallColor
       ? ['dark', 'gray-structure', 'sampled-color', 'grid-completion']
       : ['dark', 'gray-structure', 'grid-completion'];
-  const { mask, width, height } = await createWallMask(backgroundImage, mode, profile, options.cropBox, options.sampledWallColor);
+  const { mask, width, height } = await createWallMask(backgroundImage, mode, profile, 'dark', options.cropBox, options.sampledWallColor);
   const minRunLength =
     mode === 'complete'
       ? Math.max(options.gridSize * (profile === 'wall-priority' ? 1.65 : 2.1), Math.min(width, height) * (profile === 'wall-priority' ? 0.028 : 0.034))
@@ -1362,10 +1383,9 @@ export const recognizeFloorplanWalls = async (
     options.gridSize
   );
   const recognizedWalls = filterRecognizedWalls(candidateWalls, options.gridSize, Math.min(width, height), minWallLength, mode, profile);
-  const inferredWalls = mode === 'complete' ? createBridgeWalls(recognizedWalls, options.gridSize, minWallLength, profile) : [];
-  const bridgedWalls = mode === 'complete' ? dedupeRecognizedWalls([...recognizedWalls, ...inferredWalls], options.gridSize) : recognizedWalls;
-  const completionWalls = mode === 'complete' ? createGridCompletionWalls(bridgedWalls, options.gridSize, minWallLength, profile) : [];
-  const walls = mode === 'complete' ? dedupeRecognizedWalls([...bridgedWalls, ...completionWalls], options.gridSize) : recognizedWalls;
+  const bridgeWalls = mode === 'complete' ? createBridgeWalls(recognizedWalls, options.gridSize, minWallLength, profile) : [];
+  const walls = mode === 'complete' ? dedupeRecognizedWalls([...recognizedWalls, ...bridgeWalls], options.gridSize) : recognizedWalls;
+  const hintWalls = mode === 'complete' ? createGridCompletionWalls(walls, options.gridSize, minWallLength, profile) : [];
   const openingCandidates = createOpeningCandidates(recognizedWalls, walls, options.gridSize, options.scalePxPerMeter);
   const roomCandidates = createRoomCandidates(walls, options.gridSize, options.scalePxPerMeter);
   const qualityReport = createQualityReport(walls, openingCandidates, roomCandidates, options.gridSize, options.scalePxPerMeter);
@@ -1385,6 +1405,9 @@ export const recognizeFloorplanWalls = async (
     passes,
     rawWallCount: rawWalls.length,
     candidateWallCount: candidateWalls.length,
-    inferredWallCount: walls.filter((wall) => wall.source === 'inferred').length
+    inferredWallCount: walls.filter((wall) => wall.source === 'inferred').length,
+    scanWallCount: recognizedWalls.length,
+    bridgeWallCount: bridgeWalls.length,
+    hintWallCount: hintWalls.length + qualityReport.missingWallHintCount
   };
 };

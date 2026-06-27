@@ -214,6 +214,79 @@ const createDefaultRecognitionCropBox = (backgroundImage: BackgroundImage): Reco
   };
 };
 
+const createSmartRecognitionCropBox = async (backgroundImage: BackgroundImage): Promise<RecognitionCropBox> => {
+  const image = await loadImageElement(backgroundImage.dataUrl);
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+
+  if (!context) {
+    return createDefaultRecognitionCropBox(backgroundImage);
+  }
+
+  const width = Math.max(1, Math.round(backgroundImage.width));
+  const height = Math.max(1, Math.round(backgroundImage.height));
+  canvas.width = width;
+  canvas.height = height;
+  context.drawImage(image, 0, 0, width, height);
+
+  const imageData = context.getImageData(0, 0, width, height).data;
+  const xValues: number[] = [];
+  const yValues: number[] = [];
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 520));
+
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const index = (y * width + x) * 4;
+      const alpha = imageData[index + 3];
+
+      if (alpha < 30) {
+        continue;
+      }
+
+      const red = imageData[index];
+      const green = imageData[index + 1];
+      const blue = imageData[index + 2];
+      const luma = red * 0.299 + green * 0.587 + blue * 0.114;
+      const maxChannel = Math.max(red, green, blue);
+      const channelSpread = maxChannel - Math.min(red, green, blue);
+      const isLikelyWallPixel = luma < 155 && maxChannel < 190 && channelSpread < 70;
+
+      if (isLikelyWallPixel) {
+        xValues.push(x);
+        yValues.push(y);
+      }
+    }
+  }
+
+  if (xValues.length < 180 || yValues.length < 180) {
+    return createDefaultRecognitionCropBox(backgroundImage);
+  }
+
+  const quantile = (values: number[], ratio: number) => {
+    const sorted = values.slice().sort((left, right) => left - right);
+    return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * ratio)))];
+  };
+  const paddingX = Math.round(width * 0.035);
+  const paddingY = Math.round(height * 0.035);
+  const left = Math.max(0, quantile(xValues, 0.035) - paddingX);
+  const right = Math.min(width, quantile(xValues, 0.965) + paddingX);
+  const top = Math.max(0, quantile(yValues, 0.035) - paddingY);
+  const bottom = Math.min(height, quantile(yValues, 0.965) + paddingY);
+  const minWidth = width * 0.42;
+  const minHeight = height * 0.42;
+
+  if (right - left < minWidth || bottom - top < minHeight) {
+    return createDefaultRecognitionCropBox(backgroundImage);
+  }
+
+  return {
+    x: Math.round(backgroundImage.x + left),
+    y: Math.round(backgroundImage.y + top),
+    width: Math.round(right - left),
+    height: Math.round(bottom - top)
+  };
+};
+
 const createRecognitionAttemptSnapshot = (
   result: Awaited<ReturnType<typeof recognizeFloorplanWalls>>
 ): RecognitionAttemptSnapshot => ({
@@ -325,7 +398,11 @@ const createRecognitionSession = (
       minWallLength: result.minWallLength,
       rawWallCount: result.rawWallCount,
       candidateWallCount: result.candidateWallCount,
-      inferredWallCount: result.inferredWallCount
+      inferredWallCount: result.inferredWallCount,
+      scanWallCount: result.scanWallCount,
+      bridgeWallCount: result.bridgeWallCount,
+      hintWallCount: result.hintWallCount,
+      lowConfidenceHidden: true
     }
   };
 };
@@ -1498,7 +1575,7 @@ export default function App() {
   const handleBackgroundUpload = async (file: File) => {
     resetWallDraft();
     const backgroundImage = await createBackgroundImage(file, design.canvas.width, design.canvas.height);
-    const cropBox = createDefaultRecognitionCropBox(backgroundImage);
+    const cropBox = await createSmartRecognitionCropBox(backgroundImage);
     setRecognitionProfile('wall-priority');
     setRecognitionMode('complete');
     setRecognitionCropBox(cropBox);

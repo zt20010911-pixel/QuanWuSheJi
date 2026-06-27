@@ -705,7 +705,11 @@ function RecognitionLayerEditor({
         <span>{modeLabel} · 原始 {recognitionLayer.parameters.rawWallCount} 条 / 候选 {recognitionLayer.parameters.candidateWallCount} 条</span>
         <span>墙 {activeCount} 面 / 门窗 {activeOpeningCount} 个 / 房间 {activeRoomCount} 个</span>
         <span>已选 {selectedCount} 个 / 已写入 {promotedCount} 个 / 已删除 {deletedCount} 个</span>
-        <span>补全 {recognitionLayer.parameters.inferredWallCount || inferredCount} 面 / 置信度：{recognitionLayer.confidence}</span>
+        <span>
+          扫描 {recognitionLayer.parameters.scanWallCount ?? activeCount} 面 / 桥接{' '}
+          {recognitionLayer.parameters.bridgeWallCount ?? recognitionLayer.parameters.inferredWallCount ?? inferredCount} 面 / 提示{' '}
+          {recognitionLayer.parameters.hintWallCount ?? qualityReport?.missingWallHintCount ?? 0} 个
+        </span>
       </div>
       <div className="property-button-row">
         <button className="secondary-button" type="button" onClick={onRecognizeAgain} disabled={recognizingFloorplan}>

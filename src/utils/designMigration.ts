@@ -319,7 +319,15 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
           candidateWallCount: design.recognition.parameters?.candidateWallCount ?? design.recognition.walls.length,
           inferredWallCount:
             design.recognition.parameters?.inferredWallCount ??
-            design.recognition.walls.filter((wall) => wall.source === 'inferred').length
+            design.recognition.walls.filter((wall) => wall.source === 'inferred').length,
+          scanWallCount:
+            design.recognition.parameters?.scanWallCount ??
+            design.recognition.walls.filter((wall) => wall.source === 'scan').length,
+          bridgeWallCount:
+            design.recognition.parameters?.bridgeWallCount ??
+            design.recognition.walls.filter((wall) => wall.source === 'inferred').length,
+          hintWallCount: design.recognition.parameters?.hintWallCount ?? design.recognition.qualityReport?.missingWallHintCount ?? 0,
+          lowConfidenceHidden: design.recognition.parameters?.lowConfidenceHidden ?? true
         }
       }
     : undefined,

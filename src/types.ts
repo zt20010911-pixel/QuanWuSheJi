@@ -18,7 +18,7 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 15;
+export const DESIGN_DOCUMENT_VERSION = 16;
 
 export type Selection =
   | { type: 'wall'; id: string }
@@ -471,6 +471,10 @@ export type RecognitionSession = {
     rawWallCount: number;
     candidateWallCount: number;
     inferredWallCount: number;
+    scanWallCount?: number;
+    bridgeWallCount?: number;
+    hintWallCount?: number;
+    lowConfidenceHidden?: boolean;
   };
 };
 
