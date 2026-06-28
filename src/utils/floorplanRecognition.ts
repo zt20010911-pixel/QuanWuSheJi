@@ -971,12 +971,290 @@ const isWallOnOuterFrame = (wall: Wall, bounds: ReturnType<typeof getWallBounds>
     ? Math.min(Math.abs(wall.start.y - bounds.top), Math.abs(wall.start.y - bounds.bottom)) <= tolerance
     : Math.min(Math.abs(wall.start.x - bounds.left), Math.abs(wall.start.x - bounds.right)) <= tolerance;
 
-const createOpeningCandidates = (
+type OpeningSymbolComponent = {
+  kind: RecognitionOpeningCandidate['kind'];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pixelCount: number;
+  density: number;
+};
+
+const isDoorSymbolPixel = (red: number, green: number, blue: number, alpha: number) => {
+  if (alpha < 30) {
+    return false;
+  }
+
+  const luma = red * 0.299 + green * 0.587 + blue * 0.114;
+  return red >= 110 && red <= 210 && green >= 55 && green <= 175 && blue <= 145 && red > blue + 24 && luma < 188;
+};
+
+const isWindowSymbolPixel = (red: number, green: number, blue: number, alpha: number) => {
+  if (alpha < 30) {
+    return false;
+  }
+
+  return blue >= 130 && green >= 95 && red <= 135 && blue > red + 28;
+};
+
+const getOpeningSymbolPixelKind = (
+  data: Uint8ClampedArray,
+  index: number
+): RecognitionOpeningCandidate['kind'] | null => {
+  const red = data[index];
+  const green = data[index + 1];
+  const blue = data[index + 2];
+  const alpha = data[index + 3];
+
+  if (isWindowSymbolPixel(red, green, blue, alpha)) {
+    return 'window';
+  }
+
+  if (isDoorSymbolPixel(red, green, blue, alpha)) {
+    return 'door';
+  }
+
+  return null;
+};
+
+const extractOpeningSymbolComponents = async (
+  backgroundImage: BackgroundImage,
+  cropBox?: RecognitionCropBox
+): Promise<OpeningSymbolComponent[]> => {
+  const image = await loadImage(backgroundImage.dataUrl);
+  const width = Math.max(1, Math.round(backgroundImage.width));
+  const height = Math.max(1, Math.round(backgroundImage.height));
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+
+  if (!context) {
+    throw new Error('无法读取户型图像素');
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+  context.drawImage(image, 0, 0, width, height);
+
+  const imageData = context.getImageData(0, 0, width, height);
+  const visited = new Uint8Array(width * height);
+  const components: OpeningSymbolComponent[] = [];
+  const maxPixels = width * height;
+
+  for (let pixelIndex = 0; pixelIndex < maxPixels; pixelIndex += 1) {
+    if (visited[pixelIndex]) {
+      continue;
+    }
+
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+
+    if (!isInsideCropBox(backgroundImage, x, y, cropBox)) {
+      visited[pixelIndex] = 1;
+      continue;
+    }
+
+    const kind = getOpeningSymbolPixelKind(imageData.data, pixelIndex * 4);
+
+    if (!kind) {
+      continue;
+    }
+
+    const stack = [pixelIndex];
+    visited[pixelIndex] = 1;
+    let minX = x;
+    let maxX = x;
+    let minY = y;
+    let maxY = y;
+    let pixelCount = 0;
+
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      const currentX = current % width;
+      const currentY = Math.floor(current / width);
+      pixelCount += 1;
+      minX = Math.min(minX, currentX);
+      maxX = Math.max(maxX, currentX);
+      minY = Math.min(minY, currentY);
+      maxY = Math.max(maxY, currentY);
+
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          if (offsetX === 0 && offsetY === 0) {
+            continue;
+          }
+
+          const nextX = currentX + offsetX;
+          const nextY = currentY + offsetY;
+
+          if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) {
+            continue;
+          }
+
+          const nextIndex = nextY * width + nextX;
+
+          if (visited[nextIndex]) {
+            continue;
+          }
+
+          const nextKind = getOpeningSymbolPixelKind(imageData.data, nextIndex * 4);
+
+          if (nextKind !== kind) {
+            continue;
+          }
+
+          visited[nextIndex] = 1;
+          stack.push(nextIndex);
+        }
+      }
+    }
+
+    const componentWidth = maxX - minX + 1;
+    const componentHeight = maxY - minY + 1;
+
+    if (pixelCount < 8 || componentWidth < 4 || componentHeight < 4 || componentWidth > width * 0.22 || componentHeight > height * 0.22) {
+      continue;
+    }
+
+    components.push({
+      kind,
+      x: backgroundImage.x + (minX + maxX) / 2,
+      y: backgroundImage.y + (minY + maxY) / 2,
+      width: componentWidth,
+      height: componentHeight,
+      pixelCount,
+      density: pixelCount / Math.max(1, componentWidth * componentHeight)
+    });
+  }
+
+  return components;
+};
+
+const getNearestOpeningWall = (
+  point: Point,
+  kind: RecognitionOpeningCandidate['kind'],
+  preferredOrientation: 'horizontal' | 'vertical' | null,
+  walls: RecognizedFloorplanWall[],
+  maxDistance: number
+): { wall: RecognizedFloorplanWall; x: number; y: number; distance: number } | null => {
+  let best: { wall: RecognizedFloorplanWall; x: number; y: number; distance: number } | null = null;
+
+  for (const wall of walls) {
+    const horizontal = isHorizontalWall(wall);
+
+    if (kind === 'window' && preferredOrientation && (preferredOrientation === 'horizontal') !== horizontal) {
+      continue;
+    }
+
+    const range = getWallRange(wall);
+    const projected = horizontal
+      ? { x: Math.max(range.start, Math.min(range.end, point.x)), y: wall.start.y }
+      : { x: wall.start.x, y: Math.max(range.start, Math.min(range.end, point.y)) };
+    const distance = Math.hypot(projected.x - point.x, projected.y - point.y);
+
+    if (distance > maxDistance) {
+      continue;
+    }
+
+    if (!best || distance < best.distance) {
+      best = { wall, x: projected.x, y: projected.y, distance };
+    }
+  }
+
+  return best;
+};
+
+const createSymbolOpeningCandidates = async (
+  backgroundImage: BackgroundImage,
+  walls: RecognizedFloorplanWall[],
+  gridSize: number,
+  scalePxPerMeter: number,
+  cropBox?: RecognitionCropBox
+): Promise<RecognitionOpeningCandidate[]> => {
+  if (walls.length === 0) {
+    return [];
+  }
+
+  const components = await extractOpeningSymbolComponents(backgroundImage, cropBox);
+  const candidates: RecognitionOpeningCandidate[] = [];
+  const maxWallDistance = Math.max(gridSize * 1.65, scalePxPerMeter * 0.42);
+
+  components.forEach((component) => {
+    const symbolLongSide = Math.max(component.width, component.height);
+    const symbolShortSide = Math.min(component.width, component.height);
+    const aspectRatio = symbolLongSide / Math.max(symbolShortSide, 1);
+    const slenderDoorLine = aspectRatio >= 3.4 && component.density <= 0.72;
+    const sparseDoorArc = aspectRatio < 3.4 && symbolShortSide >= symbolLongSide * 0.42 && component.density <= 0.24;
+    const preferredOrientation =
+      component.kind === 'window'
+        ? component.width >= component.height * 1.6
+          ? 'horizontal'
+          : component.height >= component.width * 1.6
+            ? 'vertical'
+            : null
+        : null;
+
+    if (component.kind === 'window' && (symbolLongSide < gridSize * 0.65 || aspectRatio < 1.6 || component.density > 0.56)) {
+      return;
+    }
+
+    if (component.kind === 'door' && (symbolLongSide < gridSize * 0.45 || (!slenderDoorLine && !sparseDoorArc))) {
+      return;
+    }
+
+    const nearest = getNearestOpeningWall(
+      { x: component.x, y: component.y },
+      component.kind,
+      preferredOrientation,
+      walls,
+      maxWallDistance
+    );
+
+    if (!nearest) {
+      return;
+    }
+
+    const wallHorizontal = isHorizontalWall(nearest.wall);
+    const widthMeters =
+      component.kind === 'door'
+        ? Math.max(0.7, Math.min(1.15, symbolLongSide / scalePxPerMeter))
+        : Math.max(0.6, Math.min(1.8, symbolLongSide / scalePxPerMeter));
+    const confidence =
+      component.kind === 'door'
+        ? Math.min(
+            0.88,
+            Math.max(0.62, 0.58 + Math.min(component.pixelCount, 260) / 900 - nearest.distance / maxWallDistance * 0.16 + (sparseDoorArc ? 0.06 : 0))
+          )
+        : Math.min(0.9, Math.max(0.66, 0.64 + Math.min(component.pixelCount, 180) / 700 - nearest.distance / maxWallDistance * 0.14));
+    const candidate: RecognitionOpeningCandidate = {
+      id: createId(component.kind === 'door' ? 'rec-symbol-door' : 'rec-symbol-window'),
+      kind: component.kind,
+      wallId: nearest.wall.id,
+      x: snapValue(nearest.x, gridSize),
+      y: snapValue(nearest.y, gridSize),
+      width: Math.round(widthMeters * 100),
+      rotation: wallHorizontal ? 0 : 90,
+      status: 'active',
+      confidence,
+      source: 'scan'
+    };
+
+    if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.4, 34))) {
+      candidates.push(candidate);
+    }
+  });
+
+  return candidates;
+};
+
+const createOpeningCandidates = async (
+  backgroundImage: BackgroundImage,
   scanWalls: RecognizedFloorplanWall[],
   finalWalls: RecognizedFloorplanWall[],
   gridSize: number,
-  scalePxPerMeter: number
-): RecognitionOpeningCandidate[] => {
+  scalePxPerMeter: number,
+  cropBox?: RecognitionCropBox
+): Promise<RecognitionOpeningCandidate[]> => {
   const candidates: RecognitionOpeningCandidate[] = [];
   if (scanWalls.length === 0 && finalWalls.length === 0) {
     return candidates;
@@ -1020,6 +1298,10 @@ const createOpeningCandidates = (
           continue;
         }
 
+        if (current.confidence < 0.56 || next.confidence < 0.56) {
+          continue;
+        }
+
         const line = snapValue((getWallLineCoordinate(current) + getWallLineCoordinate(next)) / 2, gridSize);
         const start = snapValue(currentRange.end, gridSize);
         const end = snapValue(nextRange.start, gridSize);
@@ -1034,6 +1316,11 @@ const createOpeningCandidates = (
           0.9,
           Math.max(0.48, (current.confidence + next.confidence) / 2 - Math.abs(gapMeters - (kind === 'door' ? 0.9 : 1.35)) * 0.08)
         );
+
+        if (confidence < 0.58) {
+          continue;
+        }
+
         const candidate: RecognitionOpeningCandidate = {
           id: createId('rec-opening'),
           kind,
@@ -1054,82 +1341,17 @@ const createOpeningCandidates = (
     });
   });
 
-  const outerFrameTolerance = Math.max(gridSize * 1.55, 42);
-  const endpointTolerance = Math.max(gridSize * 0.85, 18);
-  const outerWalls = finalWalls.filter((wall) => isWallOnOuterFrame(wall, bounds, outerFrameTolerance));
+  const symbolCandidates = await createSymbolOpeningCandidates(backgroundImage, finalWalls.length ? finalWalls : scanWalls, gridSize, scalePxPerMeter, cropBox);
 
-  outerWalls.forEach((wall) => {
-    const length = getWallLength(wall);
-
-    if (length < scalePxPerMeter * 2.2 || (wall.confidence ?? 0) < 0.58) {
-      return;
-    }
-
-    const widthMeters = Math.max(0.9, Math.min(1.8, length / scalePxPerMeter * 0.32));
-    const candidate: RecognitionOpeningCandidate = {
-      id: createId('rec-opening-window'),
-      kind: 'window',
-      wallId: wall.id,
-      x: (wall.start.x + wall.end.x) / 2,
-      y: (wall.start.y + wall.end.y) / 2,
-      width: Math.round(widthMeters * 100),
-      rotation: isHorizontalWall(wall) ? 0 : 90,
-      status: 'active',
-      confidence: Math.min(0.66, Math.max(0.52, (wall.confidence ?? 0.6) - 0.08)),
-      source: 'gap'
-    };
-
-    if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 2.4, 72))) {
+  symbolCandidates.forEach((candidate) => {
+    if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.45, 36))) {
       candidates.push(candidate);
     }
   });
 
-  finalWalls.forEach((wall) => {
-    if (isWallOnOuterFrame(wall, bounds, outerFrameTolerance) || getWallLength(wall) < scalePxPerMeter * 1.2 || (wall.confidence ?? 0) < 0.55) {
-      return;
-    }
-
-    [wall.start, wall.end].forEach((point) => {
-      const connected = finalWalls.some((item) => item.id !== wall.id && isPointNearWall(point, item, endpointTolerance));
-
-      if (connected) {
-        return;
-      }
-
-      const nearPerpendicular = finalWalls.some((item) => {
-        if (item.id === wall.id || isHorizontalWall(item) === isHorizontalWall(wall)) {
-          return false;
-        }
-
-        return isPointNearWall(point, item, Math.max(scalePxPerMeter * 0.9, gridSize * 2.2));
-      });
-
-      if (!nearPerpendicular) {
-        return;
-      }
-
-      const candidate: RecognitionOpeningCandidate = {
-        id: createId('rec-opening-door'),
-        kind: 'door',
-        wallId: wall.id,
-        x: point.x,
-        y: point.y,
-        width: 90,
-        rotation: isHorizontalWall(wall) ? 0 : 90,
-        status: 'active',
-        confidence: 0.56,
-        source: 'gap'
-      };
-
-      if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.6, 40))) {
-        candidates.push(candidate);
-      }
-    });
-  });
-
   return candidates
     .sort((left, right) => (right.confidence ?? 0) - (left.confidence ?? 0))
-    .slice(0, 36);
+    .slice(0, 24);
 };
 
 const createRoomCandidates = (
@@ -1555,7 +1777,7 @@ export const recognizeFloorplanWalls = async (
   const bridgeWalls = mode === 'complete' ? createBridgeWalls(recognizedWalls, options.gridSize, minWallLength, profile) : [];
   const walls = mode === 'complete' ? dedupeRecognizedWalls([...recognizedWalls, ...bridgeWalls], options.gridSize) : recognizedWalls;
   const hintWalls = mode === 'complete' ? createGridCompletionWalls(walls, options.gridSize, minWallLength, profile) : [];
-  const openingCandidates = createOpeningCandidates(recognizedWalls, walls, options.gridSize, options.scalePxPerMeter);
+  const openingCandidates = await createOpeningCandidates(backgroundImage, recognizedWalls, walls, options.gridSize, options.scalePxPerMeter, options.cropBox);
   const roomCandidates = createRoomCandidates(walls, options.gridSize, options.scalePxPerMeter);
   const qualityReport = createQualityReport(walls, openingCandidates, roomCandidates, options.gridSize, options.scalePxPerMeter);
 

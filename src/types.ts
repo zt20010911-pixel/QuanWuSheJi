@@ -18,7 +18,7 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 18;
+export const DESIGN_DOCUMENT_VERSION = 19;
 
 export type Selection =
   | { type: 'wall'; id: string }
