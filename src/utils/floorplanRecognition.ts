@@ -971,6 +971,24 @@ const isWallOnOuterFrame = (wall: Wall, bounds: ReturnType<typeof getWallBounds>
     ? Math.min(Math.abs(wall.start.y - bounds.top), Math.abs(wall.start.y - bounds.bottom)) <= tolerance
     : Math.min(Math.abs(wall.start.x - bounds.left), Math.abs(wall.start.x - bounds.right)) <= tolerance;
 
+const isNearOpeningEvidence = (
+  candidates: RecognitionOpeningCandidate[],
+  kind: RecognitionOpeningCandidate['kind'],
+  point: Point,
+  tolerance: number
+) => candidates.some((candidate) => candidate.kind === kind && Math.hypot(candidate.x - point.x, candidate.y - point.y) <= tolerance);
+
+const findNearbyOpeningCandidateIndex = (
+  candidates: RecognitionOpeningCandidate[],
+  candidate: Pick<RecognitionOpeningCandidate, 'x' | 'y' | 'rotation'>,
+  tolerance: number
+) =>
+  candidates.findIndex(
+    (item) =>
+      Math.abs(item.rotation - candidate.rotation) <= 5 &&
+      Math.hypot(item.x - candidate.x, item.y - candidate.y) <= tolerance
+  );
+
 type OpeningSymbolComponent = {
   kind: RecognitionOpeningCandidate['kind'];
   x: number;
@@ -1169,7 +1187,9 @@ const createSymbolOpeningCandidates = async (
   walls: RecognizedFloorplanWall[],
   gridSize: number,
   scalePxPerMeter: number,
-  cropBox?: RecognitionCropBox
+  cropBox: RecognitionCropBox | undefined,
+  gapCandidates: RecognitionOpeningCandidate[],
+  bounds: ReturnType<typeof getWallBounds>
 ): Promise<RecognitionOpeningCandidate[]> => {
   if (walls.length === 0) {
     return [];
@@ -1215,6 +1235,23 @@ const createSymbolOpeningCandidates = async (
     }
 
     const wallHorizontal = isHorizontalWall(nearest.wall);
+    const nearbyEvidenceTolerance = Math.max(gridSize * 2.4, scalePxPerMeter * 0.72);
+    const nearSameKindGap = isNearOpeningEvidence(gapCandidates, component.kind, { x: nearest.x, y: nearest.y }, nearbyEvidenceTolerance);
+    const nearAnyGap = findNearbyOpeningCandidateIndex(
+      gapCandidates,
+      { x: nearest.x, y: nearest.y, rotation: wallHorizontal ? 0 : 90 },
+      nearbyEvidenceTolerance
+    ) >= 0;
+    const onOuterFrame = isWallOnOuterFrame(nearest.wall, bounds, Math.max(gridSize * 1.55, 42));
+
+    if (component.kind === 'door' && !nearAnyGap) {
+      return;
+    }
+
+    if (component.kind === 'window' && !nearSameKindGap && !onOuterFrame) {
+      return;
+    }
+
     const widthMeters =
       component.kind === 'door'
         ? Math.max(0.7, Math.min(1.15, symbolLongSide / scalePxPerMeter))
@@ -1239,7 +1276,9 @@ const createSymbolOpeningCandidates = async (
       source: 'scan'
     };
 
-    if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.4, 34))) {
+    const dedupeTolerance = component.kind === 'door' ? Math.max(gridSize * 2.2, 56) : Math.max(gridSize * 1.65, 40);
+
+    if (!isNearExistingOpeningCandidate(candidates, candidate, dedupeTolerance)) {
       candidates.push(candidate);
     }
   });
@@ -1341,10 +1380,28 @@ const createOpeningCandidates = async (
     });
   });
 
-  const symbolCandidates = await createSymbolOpeningCandidates(backgroundImage, finalWalls.length ? finalWalls : scanWalls, gridSize, scalePxPerMeter, cropBox);
+  const symbolCandidates = await createSymbolOpeningCandidates(
+    backgroundImage,
+    finalWalls.length ? finalWalls : scanWalls,
+    gridSize,
+    scalePxPerMeter,
+    cropBox,
+    candidates,
+    bounds
+  );
 
   symbolCandidates.forEach((candidate) => {
-    if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.45, 36))) {
+    const dedupeTolerance = candidate.kind === 'door' ? Math.max(gridSize * 2.4, scalePxPerMeter * 0.7) : Math.max(gridSize * 1.8, 46);
+    const nearbyIndex = findNearbyOpeningCandidateIndex(candidates, candidate, dedupeTolerance);
+
+    if (nearbyIndex >= 0) {
+      if (candidates[nearbyIndex].kind !== candidate.kind && candidates[nearbyIndex].source === 'gap') {
+        candidates[nearbyIndex] = { ...candidate, id: candidates[nearbyIndex].id };
+      }
+      return;
+    }
+
+    if (!isNearExistingOpeningCandidate(candidates, candidate, dedupeTolerance)) {
       candidates.push(candidate);
     }
   });
