@@ -86,6 +86,7 @@ type PropertiesPanelProps = {
   onSelectAllRecognitionWalls: () => void;
   onSelectAllRecognitionOpenings: () => void;
   onSelectAllRecognitionRooms: () => void;
+  onSelectAllRecognitionBalconies: () => void;
   onClearRecognitionSelection: () => void;
   onDeleteSelectedRecognitionWalls: () => void;
   onRestoreDeletedRecognitionWalls: () => void;
@@ -98,6 +99,10 @@ type PropertiesPanelProps = {
   onPromoteSelectedRecognitionRooms: () => void;
   onPromoteAllRecognitionRooms: () => void;
   onSaveAiRecognitionDraft: () => void;
+  aiRecognitionApiKey: string;
+  onAiRecognitionApiKeyChange: (value: string) => void;
+  onAiRecognitionSettingsChange: (patch: Partial<NonNullable<RecognitionSession['aiRecognitionSettings']>>) => void;
+  onRunAiRecognitionRefinement: () => void;
   onDiscardRecognitionLayer: () => void;
   recognizingFloorplan: boolean;
   importWizardOpen: boolean;
@@ -184,6 +189,7 @@ export default function PropertiesPanel({
   onSelectAllRecognitionWalls,
   onSelectAllRecognitionOpenings,
   onSelectAllRecognitionRooms,
+  onSelectAllRecognitionBalconies,
   onClearRecognitionSelection,
   onDeleteSelectedRecognitionWalls,
   onRestoreDeletedRecognitionWalls,
@@ -196,6 +202,10 @@ export default function PropertiesPanel({
   onPromoteSelectedRecognitionRooms,
   onPromoteAllRecognitionRooms,
   onSaveAiRecognitionDraft,
+  aiRecognitionApiKey,
+  onAiRecognitionApiKeyChange,
+  onAiRecognitionSettingsChange,
+  onRunAiRecognitionRefinement,
   onDiscardRecognitionLayer,
   recognizingFloorplan,
   importWizardOpen,
@@ -299,6 +309,7 @@ export default function PropertiesPanel({
                 onSelectAll={onSelectAllRecognitionWalls}
                 onSelectAllOpenings={onSelectAllRecognitionOpenings}
                 onSelectAllRooms={onSelectAllRecognitionRooms}
+                onSelectAllBalconies={onSelectAllRecognitionBalconies}
                 onClearSelection={onClearRecognitionSelection}
                 onDeleteSelected={onDeleteSelectedRecognitionWalls}
                 onRestoreDeleted={onRestoreDeletedRecognitionWalls}
@@ -311,6 +322,10 @@ export default function PropertiesPanel({
                 onPromoteSelectedRooms={onPromoteSelectedRecognitionRooms}
                 onPromoteAllRooms={onPromoteAllRecognitionRooms}
                 onSaveAiDraft={onSaveAiRecognitionDraft}
+                aiRecognitionApiKey={aiRecognitionApiKey}
+                onAiRecognitionApiKeyChange={onAiRecognitionApiKeyChange}
+                onAiRecognitionSettingsChange={onAiRecognitionSettingsChange}
+                onRunAiRecognitionRefinement={onRunAiRecognitionRefinement}
                 onDiscard={onDiscardRecognitionLayer}
                 onRecognizeAgain={onRecognizeFloorplan}
                 onRecognizeSelectedArea={onRecognizeSelectedArea}
@@ -586,6 +601,7 @@ function RecognitionLayerEditor({
   onSelectAll,
   onSelectAllOpenings,
   onSelectAllRooms,
+  onSelectAllBalconies,
   onClearSelection,
   onDeleteSelected,
   onRestoreDeleted,
@@ -598,6 +614,10 @@ function RecognitionLayerEditor({
   onPromoteSelectedRooms,
   onPromoteAllRooms,
   onSaveAiDraft,
+  aiRecognitionApiKey,
+  onAiRecognitionApiKeyChange,
+  onAiRecognitionSettingsChange,
+  onRunAiRecognitionRefinement,
   onDiscard,
   onRecognizeAgain,
   onRecognizeSelectedArea,
@@ -612,6 +632,7 @@ function RecognitionLayerEditor({
   onSelectAll: () => void;
   onSelectAllOpenings: () => void;
   onSelectAllRooms: () => void;
+  onSelectAllBalconies: () => void;
   onClearSelection: () => void;
   onDeleteSelected: () => void;
   onRestoreDeleted: () => void;
@@ -624,6 +645,10 @@ function RecognitionLayerEditor({
   onPromoteSelectedRooms: () => void;
   onPromoteAllRooms: () => void;
   onSaveAiDraft: () => void;
+  aiRecognitionApiKey: string;
+  onAiRecognitionApiKeyChange: (value: string) => void;
+  onAiRecognitionSettingsChange: (patch: Partial<NonNullable<RecognitionSession['aiRecognitionSettings']>>) => void;
+  onRunAiRecognitionRefinement: () => void;
   onDiscard: () => void;
   onRecognizeAgain: () => void;
   onRecognizeSelectedArea: () => void;
@@ -635,6 +660,19 @@ function RecognitionLayerEditor({
   const activeCount = recognitionLayer.walls.filter((wall) => wall.status === 'active').length;
   const activeOpeningCount = (recognitionLayer.openingCandidates ?? []).filter((candidate) => candidate.status === 'active').length;
   const activeRoomCount = (recognitionLayer.roomCandidates ?? []).filter((candidate) => candidate.status === 'active').length;
+  const activeDoorCount = (recognitionLayer.openingCandidates ?? []).filter(
+    (candidate) => candidate.status === 'active' && candidate.kind === 'door'
+  ).length;
+  const activeWindowCount = (recognitionLayer.openingCandidates ?? []).filter(
+    (candidate) => candidate.status === 'active' && candidate.kind === 'window'
+  ).length;
+  const activeBalconyCount = (recognitionLayer.roomCandidates ?? []).filter(
+    (candidate) => candidate.status === 'active' && candidate.roomKind === 'balcony'
+  ).length;
+  const activeAiCandidateCount =
+    recognitionLayer.walls.filter((wall) => wall.status === 'active' && wall.source === 'ai-draft').length +
+    (recognitionLayer.openingCandidates ?? []).filter((candidate) => candidate.status === 'active' && candidate.source === 'ai-draft').length +
+    (recognitionLayer.roomCandidates ?? []).filter((candidate) => candidate.status === 'active' && candidate.source === 'ai-draft').length;
   const deletedCount =
     recognitionLayer.walls.filter((wall) => wall.status === 'deleted').length +
     (recognitionLayer.openingCandidates ?? []).filter((candidate) => candidate.status === 'deleted').length +
@@ -674,6 +712,13 @@ function RecognitionLayerEditor({
     : null;
   const activeOuterGapCount = qualityReport?.outerGapMarkers.filter((marker) => marker.status === 'active').length ?? 0;
   const [currentAttempt, previousAttempt] = recognitionLayer.attemptHistory ?? [];
+  const aiSettings = recognitionLayer.aiRecognitionSettings ?? {
+    provider: 'deepseek' as const,
+    model: 'deepseekv4pro' as const,
+    endpoint: '',
+    enabled: false
+  };
+  const aiRunDraft = recognitionLayer.aiRecognitionRunDraft;
 
   const updateFilter = (key: keyof typeof filters, value: boolean) => {
     onChange((current) => ({
@@ -706,6 +751,8 @@ function RecognitionLayerEditor({
       <div className="recognition-summary">
         <span>{modeLabel} · 原始 {recognitionLayer.parameters.rawWallCount} 条 / 候选 {recognitionLayer.parameters.candidateWallCount} 条</span>
         <span>墙 {activeCount} 面 / 门窗 {activeOpeningCount} 个 / 房间 {activeRoomCount} 个</span>
+        <span>门 {activeDoorCount} 个 / 窗 {activeWindowCount} 个 / 阳台 {activeBalconyCount} 个</span>
+        <span>AI 草稿候选 {activeAiCandidateCount} 个</span>
         <span>已选 {selectedCount} 个 / 已写入 {promotedCount} 个 / 已删除 {deletedCount} 个</span>
         <span>
           扫描 {recognitionLayer.parameters.scanWallCount ?? activeCount} 面 / 桥接{' '}
@@ -729,6 +776,50 @@ function RecognitionLayerEditor({
         </button>
         <button className="primary-button" type="button" onClick={onPromoteAll} disabled={safeActiveWallCount === 0}>
           安全写入墙体
+        </button>
+      </div>
+      <div className="recognition-quality">
+        <strong>本地精修</strong>
+        <span>门候选需要墙洞和门弧/门扇共同确认；窗候选优先使用外墙窗线。</span>
+        <span>阳台候选单独统计，写入后会以阳台区域保存。</span>
+      </div>
+      <div className="recognition-quality">
+        <strong>AI 精修</strong>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={aiSettings.enabled}
+            onChange={(event) => onAiRecognitionSettingsChange({ enabled: event.target.checked })}
+          />
+          <span>启用 DeepSeek V4 Pro 精修</span>
+        </label>
+        <label>
+          <span>Endpoint</span>
+          <input
+            value={aiSettings.endpoint}
+            onChange={(event) => onAiRecognitionSettingsChange({ endpoint: event.target.value })}
+            placeholder="例如 https://api.deepseek.com/chat/completions"
+          />
+        </label>
+        <label>
+          <span>临时 API Key</span>
+          <input
+            type="password"
+            value={aiRecognitionApiKey}
+            onChange={(event) => onAiRecognitionApiKeyChange(event.target.value)}
+            placeholder="只在当前页面会话中使用"
+          />
+        </label>
+        <div className="area-reference">模型：{aiSettings.model} · Key 不保存到方案、不导出 JSON。</div>
+        {aiRunDraft && (
+          <div className="area-reference">
+            状态：{aiRunDraft.status} · {aiRunDraft.resultSummary}
+            {aiRunDraft.lastError ? ` · ${aiRunDraft.lastError}` : ''}
+          </div>
+        )}
+        <button className="secondary-button" type="button" onClick={onRunAiRecognitionRefinement}>
+          <Wand2 size={16} />
+          运行 AI 精修
         </button>
       </div>
       {lowConfidenceActiveWallCount > 0 && (
@@ -863,8 +954,16 @@ function RecognitionLayerEditor({
         <button className="secondary-button" type="button" onClick={onSelectAllRooms} disabled={activeRoomCount === 0}>
           全选房间
         </button>
+        <button className="secondary-button" type="button" onClick={onSelectAllBalconies} disabled={activeBalconyCount === 0}>
+          全选阳台
+        </button>
+      </div>
+      <div className="property-button-row">
         <button className="secondary-button" type="button" onClick={onClearSelection} disabled={selectedCount === 0}>
           清空选择
+        </button>
+        <button className="primary-button" type="button" onClick={onPromoteSelectedRooms} disabled={selectedRoomCount === 0}>
+          写入选中房间/阳台
         </button>
       </div>
       <div className="property-button-row">
@@ -900,9 +999,6 @@ function RecognitionLayerEditor({
         </button>
       </div>
       <div className="property-button-row">
-        <button className="primary-button" type="button" onClick={onPromoteSelectedRooms} disabled={selectedRoomCount === 0}>
-          写入选中房间
-        </button>
         <button className="primary-button" type="button" onClick={onPromoteAllRooms} disabled={activeRoomCount === 0}>
           写入全部房间
         </button>

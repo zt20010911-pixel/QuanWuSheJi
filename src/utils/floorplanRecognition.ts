@@ -1273,7 +1273,11 @@ const createSymbolOpeningCandidates = async (
       rotation: wallHorizontal ? 0 : 90,
       status: 'active',
       confidence,
-      source: 'scan'
+      source: 'scan',
+      evidence:
+        component.kind === 'door'
+          ? [sparseDoorArc ? 'door-arc' : 'door-leaf']
+          : ['window-line']
     };
 
     const dedupeTolerance = component.kind === 'door' ? Math.max(gridSize * 2.2, 56) : Math.max(gridSize * 1.65, 40);
@@ -1366,12 +1370,13 @@ const createOpeningCandidates = async (
           wallId: current.id,
           x: orientation === 'horizontal' ? center : line,
           y: orientation === 'horizontal' ? line : center,
-          width: Math.max(40, Math.round(gapMeters * 100)),
-          rotation: orientation === 'horizontal' ? 0 : 90,
-          status: 'active',
-          confidence,
-          source: 'gap'
-        };
+      width: Math.max(40, Math.round(gapMeters * 100)),
+      rotation: orientation === 'horizontal' ? 0 : 90,
+      status: 'active',
+      confidence,
+      source: 'gap',
+      evidence: ['wall-gap']
+    };
 
         if (!isNearExistingOpeningCandidate(candidates, candidate, Math.max(gridSize * 1.2, 28))) {
           candidates.push(candidate);
@@ -1395,9 +1400,24 @@ const createOpeningCandidates = async (
     const nearbyIndex = findNearbyOpeningCandidateIndex(candidates, candidate, dedupeTolerance);
 
     if (nearbyIndex >= 0) {
+      const existingCandidate = candidates[nearbyIndex];
+      const mergedEvidence = Array.from(new Set([...(existingCandidate.evidence ?? []), ...(candidate.evidence ?? [])]));
+
       if (candidates[nearbyIndex].kind !== candidate.kind && candidates[nearbyIndex].source === 'gap') {
-        candidates[nearbyIndex] = { ...candidate, id: candidates[nearbyIndex].id };
+        candidates[nearbyIndex] = {
+          ...candidate,
+          id: existingCandidate.id,
+          evidence: mergedEvidence,
+          confidence: Math.max(existingCandidate.confidence ?? 0, candidate.confidence ?? 0)
+        };
+        return;
       }
+
+      candidates[nearbyIndex] = {
+        ...existingCandidate,
+        evidence: mergedEvidence,
+        confidence: Math.max(existingCandidate.confidence ?? 0, candidate.confidence ?? 0)
+      };
       return;
     }
 
@@ -1407,6 +1427,15 @@ const createOpeningCandidates = async (
   });
 
   return candidates
+    .filter((candidate) => {
+      const evidence = new Set(candidate.evidence ?? []);
+
+      if (candidate.kind === 'door') {
+        return evidence.has('wall-gap') && (evidence.has('door-arc') || evidence.has('door-leaf') || evidence.has('ai'));
+      }
+
+      return evidence.has('window-line') || (evidence.has('wall-gap') && (candidate.confidence ?? 0) >= 0.74);
+    })
     .sort((left, right) => (right.confidence ?? 0) - (left.confidence ?? 0))
     .slice(0, 24);
 };
@@ -1472,7 +1501,8 @@ const createRoomCandidates = (
         areaSqm: Math.round(areaSqm * 10) / 10,
         status: 'active',
         confidence: Math.min(0.88, Math.max(0.45, averageCoverage)),
-        source: 'graph'
+        source: 'graph',
+        roomKind: 'room'
       });
     }
   }
@@ -1544,7 +1574,8 @@ const createRoomCandidates = (
           areaSqm: Math.round(areaSqm * 10) / 10,
           status: 'active',
           confidence: Math.min(0.72, Math.max(0.46, averageCoverage + strongEdges * 0.06 - weakEdges * 0.04)),
-          source: 'graph'
+          source: 'graph',
+          roomKind: 'balcony'
         });
       }
     }

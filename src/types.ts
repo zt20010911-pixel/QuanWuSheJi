@@ -18,7 +18,7 @@ export type ViewMode = 'plan' | 'threeD';
 
 export type WallDrawMode = 'single' | 'continuous';
 
-export const DESIGN_DOCUMENT_VERSION = 19;
+export const DESIGN_DOCUMENT_VERSION = 20;
 
 export type Selection =
   | { type: 'wall'; id: string }
@@ -359,6 +359,8 @@ export type RecognitionWallSource = RecognitionCandidateSource | 'merged';
 
 export type RecognitionWallStatus = RecognitionCandidateStatus;
 
+export type RecognitionOpeningEvidence = 'wall-gap' | 'door-arc' | 'door-leaf' | 'window-line' | 'ai';
+
 export type RecognitionWall = Wall & {
   status: RecognitionWallStatus;
   confidence?: number;
@@ -378,9 +380,12 @@ export type RecognitionOpeningCandidate = {
   status: RecognitionCandidateStatus;
   confidence?: number;
   source?: RecognitionCandidateSource;
+  evidence?: RecognitionOpeningEvidence[];
   promotedOpeningId?: string;
   updatedAt?: string;
 };
+
+export type RecognitionRoomKind = 'room' | 'balcony';
 
 export type RecognitionRoomCandidate = {
   id: string;
@@ -388,6 +393,7 @@ export type RecognitionRoomCandidate = {
   points: Point[];
   label: Point;
   areaSqm?: number;
+  roomKind?: RecognitionRoomKind;
   status: RecognitionCandidateStatus;
   confidence?: number;
   source?: RecognitionCandidateSource;
@@ -437,6 +443,29 @@ export type AiRecognitionDraft = {
   note: string;
 };
 
+export type AiRecognitionSettings = {
+  provider: 'deepseek';
+  model: 'deepseekv4pro';
+  endpoint: string;
+  enabled: boolean;
+};
+
+export type AiRecognitionRunDraft = {
+  id: string;
+  status: 'idle' | 'missing-config' | 'ready' | 'running' | 'succeeded' | 'failed';
+  createdAt: string;
+  inputSnapshot: {
+    backgroundFileName: string;
+    scalePxPerMeter: number;
+    gridSize: number;
+    localWallCount: number;
+    localOpeningCount: number;
+    localRoomCount: number;
+  };
+  resultSummary: string;
+  lastError?: string;
+};
+
 export type RecognitionSession = {
   id: string;
   createdAt: string;
@@ -455,6 +484,8 @@ export type RecognitionSession = {
   candidateFilters?: RecognitionCandidateFilters;
   workspace?: RecognitionWorkspaceState;
   aiRecognitionDraft?: AiRecognitionDraft;
+  aiRecognitionSettings?: AiRecognitionSettings;
+  aiRecognitionRunDraft?: AiRecognitionRunDraft;
   attemptHistory?: RecognitionAttemptSnapshot[];
   wallCount: number;
   horizontalCount: number;

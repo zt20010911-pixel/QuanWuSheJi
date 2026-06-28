@@ -45,6 +45,7 @@ import type {
 } from './types';
 import { getDesign, listDesigns, saveDesign } from './utils/designStorage';
 import { createDeliveryHtml, createDxfDraft, createModelDraft, createPlanSvg, createSharePackageHtml } from './utils/designExport';
+import { createAiRecognitionRunDraft, runDeepSeekRecognition } from './utils/aiRecognitionAgent';
 import { recognizeFloorplanWalls } from './utils/floorplanRecognition';
 import { createId, snapPoint } from './utils/geometry';
 import {
@@ -377,6 +378,12 @@ const createRecognitionSession = (
     roomCandidates,
     qualityReport: result.qualityReport,
     candidateFilters: { ...DEFAULT_RECOGNITION_CANDIDATE_FILTERS },
+    aiRecognitionSettings: {
+      provider: 'deepseek',
+      model: 'deepseekv4pro',
+      endpoint: '',
+      enabled: false
+    },
     workspace: {
       ...DEFAULT_RECOGNITION_WORKSPACE_STATE,
       ...(previousRecognition?.workspace ?? {}),
@@ -508,6 +515,7 @@ export default function App() {
   const [recognitionCropBox, setRecognitionCropBox] = useState<RecognitionCropBox | null>(null);
   const [recognitionWorkspace, setRecognitionWorkspace] = useState<RecognitionWorkspaceState>(DEFAULT_RECOGNITION_WORKSPACE_STATE);
   const [sampledWallColor, setSampledWallColor] = useState<RecognitionSampledWallColor | undefined>();
+  const [aiRecognitionApiKey, setAiRecognitionApiKey] = useState('');
   const [samplingWallColor, setSamplingWallColor] = useState(false);
   const [importWizardOpen, setImportWizardOpen] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
@@ -1934,6 +1942,20 @@ export default function App() {
     );
   };
 
+  const selectAllRecognitionBalconies = () => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        selectedWallIds: [],
+        selectedOpeningCandidateIds: [],
+        selectedRoomCandidateIds: (recognition.roomCandidates ?? [])
+          .filter((candidate) => candidate.status === 'active' && candidate.roomKind === 'balcony')
+          .map((candidate) => candidate.id)
+      }),
+      '已选中全部阳台候选'
+    );
+  };
+
   const clearRecognitionSelection = () => {
     updateRecognitionLayer(
       (recognition) => ({
@@ -2218,12 +2240,16 @@ export default function App() {
         candidateId: candidate.id,
         roomZone: {
           id: createId('room-zone'),
-          name: candidate.name ?? `识别房间 ${(current.roomZones ?? []).length + index + 1}`,
+          name:
+            candidate.name ??
+            (candidate.roomKind === 'balcony'
+              ? `识别阳台 ${(current.roomZones ?? []).filter((zone) => zone.name.includes('阳台')).length + index + 1}`
+              : `识别房间 ${(current.roomZones ?? []).length + index + 1}`),
           points: candidate.points,
           label: candidate.label,
           manualAreaSqm: candidate.areaSqm,
           materialIds: { ...DEFAULT_ROOM_ZONE_MATERIAL_IDS },
-          color: colors[((current.roomZones ?? []).length + index) % colors.length]
+          color: candidate.roomKind === 'balcony' ? '#a7d7b3' : colors[((current.roomZones ?? []).length + index) % colors.length]
         }
       }));
 
@@ -2280,6 +2306,103 @@ export default function App() {
       }),
       '已保存 AI 识别草稿'
     );
+  };
+
+  const updateAiRecognitionSettings = (patch: Partial<NonNullable<RecognitionSession['aiRecognitionSettings']>>) => {
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        aiRecognitionSettings: {
+          provider: 'deepseek',
+          model: 'deepseekv4pro',
+          endpoint: '',
+          enabled: false,
+          ...(recognition.aiRecognitionSettings ?? {}),
+          ...patch
+        }
+      }),
+      '已更新 AI 识别配置'
+    );
+  };
+
+  const runAiRecognitionRefinement = async () => {
+    if (!design.recognition) {
+      setStatusText('请先上传户型图并运行本地识别');
+      return;
+    }
+
+    const settings = {
+      provider: 'deepseek' as const,
+      model: 'deepseekv4pro' as const,
+      endpoint: '',
+      enabled: false,
+      ...(design.recognition.aiRecognitionSettings ?? {})
+    };
+    const apiKey = aiRecognitionApiKey.trim();
+    const endpoint = settings.endpoint.trim();
+
+    if (!settings.enabled || !endpoint || !apiKey) {
+      updateRecognitionLayer(
+        (recognition) => ({
+          ...recognition,
+          aiRecognitionSettings: settings,
+          aiRecognitionRunDraft: createAiRecognitionRunDraft(design, recognition, 'missing-config', '请先启用 AI 精修，并填写 endpoint 与临时 API Key')
+        }),
+        'AI 精修未发起：请先填写 DeepSeek Endpoint 和 API Key'
+      );
+      return;
+    }
+
+    updateRecognitionLayer(
+      (recognition) => ({
+        ...recognition,
+        aiRecognitionRunDraft: createAiRecognitionRunDraft(design, recognition, 'running', '正在请求 DeepSeek V4 Pro 精修')
+      }),
+      '正在请求 DeepSeek V4 Pro 精修'
+    );
+
+    try {
+      const result = await runDeepSeekRecognition({
+        endpoint,
+        apiKey,
+        model: settings.model,
+        design,
+        recognition: design.recognition
+      });
+
+      updateRecognitionLayer(
+        (recognition) => ({
+          ...recognition,
+          walls: [...recognition.walls, ...result.walls],
+          openingCandidates: [...(recognition.openingCandidates ?? []), ...result.openings],
+          roomCandidates: [...(recognition.roomCandidates ?? []), ...result.rooms],
+          aiRecognitionSettings: settings,
+          aiRecognitionRunDraft: createAiRecognitionRunDraft(design, recognition, 'succeeded', result.summary),
+          candidateFilters: {
+            ...DEFAULT_RECOGNITION_CANDIDATE_FILTERS,
+            ...(recognition.candidateFilters ?? {}),
+            showOpenings: true,
+            showRooms: true,
+            showPromoted: true
+          }
+        }),
+        `AI 精修返回：${result.summary}`
+      );
+    } catch (error) {
+      updateRecognitionLayer(
+        (recognition) => ({
+          ...recognition,
+          aiRecognitionRunDraft: createAiRecognitionRunDraft(
+            design,
+            recognition,
+            'failed',
+            'AI 精修请求失败',
+            error instanceof Error ? error.message : '未知错误'
+          )
+        }),
+        'AI 精修请求失败'
+      );
+    }
   };
 
   const discardRecognitionLayer = () => {
@@ -2532,6 +2655,7 @@ export default function App() {
           onSelectAllRecognitionWalls={selectAllRecognitionWalls}
           onSelectAllRecognitionOpenings={selectAllRecognitionOpenings}
           onSelectAllRecognitionRooms={selectAllRecognitionRooms}
+          onSelectAllRecognitionBalconies={selectAllRecognitionBalconies}
           onClearRecognitionSelection={clearRecognitionSelection}
           onDeleteSelectedRecognitionWalls={deleteSelectedRecognitionWalls}
           onRestoreDeletedRecognitionWalls={restoreDeletedRecognitionWalls}
@@ -2544,6 +2668,10 @@ export default function App() {
           onPromoteSelectedRecognitionRooms={() => promoteRecognitionRooms('selected')}
           onPromoteAllRecognitionRooms={() => promoteRecognitionRooms('all')}
           onSaveAiRecognitionDraft={saveAiRecognitionDraft}
+          aiRecognitionApiKey={aiRecognitionApiKey}
+          onAiRecognitionApiKeyChange={setAiRecognitionApiKey}
+          onAiRecognitionSettingsChange={updateAiRecognitionSettings}
+          onRunAiRecognitionRefinement={runAiRecognitionRefinement}
           onDiscardRecognitionLayer={discardRecognitionLayer}
           recognizingFloorplan={recognizingFloorplan}
           importWizardOpen={importWizardOpen}

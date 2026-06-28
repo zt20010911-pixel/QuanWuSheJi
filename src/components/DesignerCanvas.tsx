@@ -1126,16 +1126,20 @@ function RecognitionLayerShape({
         const selected = selectedRoomIds.has(candidate.id);
         const selectable = mode !== 'pan' && !recognition.locked && candidate.status === 'active';
         const points = candidate.points.flatMap((point) => [point.x, point.y]);
+        const aiDraft = candidate.source === 'ai-draft';
+        const balcony = candidate.roomKind === 'balcony';
+        const roomStroke = candidate.status === 'promoted' ? '#6f8991' : selected ? '#f2a23a' : aiDraft ? '#8c5bd6' : balcony ? '#37a66b' : '#5a84ff';
+        const roomFill = selected ? 'rgba(242, 162, 58, 0.18)' : balcony ? 'rgba(55, 166, 107, 0.13)' : 'rgba(90, 132, 255, 0.12)';
 
         return (
           <Group key={candidate.id} listening={selectable}>
             <Line
               points={points}
               closed
-              fill={selected ? 'rgba(242, 162, 58, 0.18)' : 'rgba(90, 132, 255, 0.12)'}
-              stroke={candidate.status === 'promoted' ? '#6f8991' : selected ? '#f2a23a' : '#5a84ff'}
+              fill={roomFill}
+              stroke={roomStroke}
               strokeWidth={selected ? 3 : 2}
-              dash={candidate.status === 'deleted' ? [4, 7] : [10, 8]}
+              dash={candidate.status === 'deleted' ? [4, 7] : aiDraft ? [6, 5] : balcony ? [12, 5] : [10, 8]}
               lineJoin="round"
               onMouseDown={(event) => {
                 if (!selectable) return;
@@ -1182,6 +1186,7 @@ function RecognitionLayerShape({
         const promoted = wall.status === 'promoted';
         const deleted = wall.status === 'deleted';
         const selectable = mode !== 'pan' && !recognition.locked && wall.status === 'active';
+        const aiDraft = wall.source === 'ai-draft';
 
         return (
           <Group key={wall.id} listening={selectable}>
@@ -1197,9 +1202,9 @@ function RecognitionLayerShape({
             )}
             <Line
               points={[wall.start.x, wall.start.y, wall.end.x, wall.end.y]}
-              stroke={deleted ? '#c76060' : promoted ? '#6f8991' : '#21a67a'}
+              stroke={deleted ? '#c76060' : promoted ? '#6f8991' : aiDraft ? '#8c5bd6' : '#21a67a'}
               strokeWidth={Math.max(8, wall.thickness)}
-              dash={deleted ? [4, 7] : promoted ? [6, 7] : [18, 10]}
+              dash={deleted ? [4, 7] : promoted ? [6, 7] : aiDraft ? [7, 6] : [18, 10]}
               lineCap="round"
               onMouseDown={(event) => {
                 if (!selectable) {
@@ -1219,6 +1224,8 @@ function RecognitionLayerShape({
         const deleted = candidate.status === 'deleted';
         const selectable = mode !== 'pan' && !recognition.locked && candidate.status === 'active';
         const widthPx = (candidate.width / 100) * design.canvas.scalePxPerMeter;
+        const aiDraft = candidate.source === 'ai-draft';
+        const candidateStroke = deleted ? '#c76060' : promoted ? '#6f8991' : aiDraft ? '#8c5bd6' : candidate.kind === 'door' ? '#b06b36' : '#2f88c5';
 
         return (
           <Group
@@ -1235,9 +1242,9 @@ function RecognitionLayerShape({
           >
             <Line
               points={[-widthPx / 2, 0, widthPx / 2, 0]}
-              stroke={deleted ? '#c76060' : promoted ? '#6f8991' : candidate.kind === 'door' ? '#b06b36' : '#2f88c5'}
+              stroke={candidateStroke}
               strokeWidth={candidate.kind === 'door' ? 5 : 4}
-              dash={deleted || promoted ? [5, 6] : undefined}
+              dash={deleted || promoted || aiDraft ? [5, 6] : undefined}
               lineCap="round"
             />
             {candidate.kind === 'door' ? (
@@ -1247,14 +1254,14 @@ function RecognitionLayerShape({
                 innerRadius={Math.max(widthPx, 18)}
                 outerRadius={Math.max(widthPx, 18)}
                 angle={90}
-                stroke={selected ? '#f2a23a' : '#b06b36'}
+                stroke={selected ? '#f2a23a' : candidateStroke}
                 strokeWidth={2}
                 listening={false}
               />
             ) : (
               <Line
                 points={[-widthPx / 2, -7, widthPx / 2, -7]}
-                stroke={selected ? '#f2a23a' : '#2f88c5'}
+                stroke={selected ? '#f2a23a' : candidateStroke}
                 strokeWidth={2}
                 listening={false}
               />

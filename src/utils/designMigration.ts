@@ -9,6 +9,8 @@ import {
   type ModelExportDraft,
   type PrintSettings,
   type RecognitionCandidateFilters,
+  type AiRecognitionRunDraft,
+  type AiRecognitionSettings,
   type RecognitionOpeningCandidate,
   type RecognitionQualityReport,
   type RecognitionRoomCandidate,
@@ -136,6 +138,32 @@ const DEFAULT_AI_DESIGN_DRAFT = {
   status: 'planned' as const
 };
 
+const DEFAULT_AI_RECOGNITION_SETTINGS: AiRecognitionSettings = {
+  provider: 'deepseek',
+  model: 'deepseekv4pro',
+  endpoint: '',
+  enabled: false
+};
+
+const createDefaultAiRecognitionRunDraft = (
+  backgroundFileName = '',
+  scalePxPerMeter = 80,
+  gridSize = 20
+): AiRecognitionRunDraft => ({
+  id: 'ai-recognition-idle',
+  status: 'idle',
+  createdAt: '',
+  inputSnapshot: {
+    backgroundFileName,
+    scalePxPerMeter,
+    gridSize,
+    localWallCount: 0,
+    localOpeningCount: 0,
+    localRoomCount: 0
+  },
+  resultSummary: '尚未运行 AI 精修'
+});
+
 const DEFAULT_MODEL_EXPORT_DRAFT: ModelExportDraft = {
   formats: ['GLB', 'OBJ', 'DXF', 'PDF'],
   status: 'planned' as const,
@@ -239,6 +267,7 @@ const normalizeRecognitionOpeningCandidate = (candidate: RecognitionOpeningCandi
   status: candidate.status ?? 'active',
   confidence: candidate.confidence ?? 0.68,
   source: candidate.source ?? 'gap',
+  evidence: candidate.evidence ?? (candidate.source === 'gap' ? ['wall-gap'] : []),
   updatedAt: candidate.updatedAt
 });
 
@@ -247,6 +276,7 @@ const normalizeRecognitionRoomCandidate = (candidate: RecognitionRoomCandidate):
   status: candidate.status ?? 'active',
   confidence: candidate.confidence ?? 0.62,
   source: candidate.source ?? 'graph',
+  roomKind: candidate.roomKind ?? (candidate.name?.includes('阳台') ? 'balcony' : 'room'),
   points: candidate.points ?? [],
   label: candidate.label ?? candidate.points?.[0] ?? { x: 0, y: 0 },
   updatedAt: candidate.updatedAt
@@ -304,6 +334,17 @@ export const normalizeDesign = (design: DesignDocument): DesignDocument => ({
           ...(design.recognition.workspace ?? {})
         },
         aiRecognitionDraft: design.recognition.aiRecognitionDraft,
+        aiRecognitionSettings: {
+          ...DEFAULT_AI_RECOGNITION_SETTINGS,
+          ...(design.recognition.aiRecognitionSettings ?? {})
+        },
+        aiRecognitionRunDraft:
+          design.recognition.aiRecognitionRunDraft ??
+          createDefaultAiRecognitionRunDraft(
+            design.recognition.sourceFileName,
+            design.canvas.scalePxPerMeter,
+            design.canvas.gridSize
+          ),
         attemptHistory: design.recognition.attemptHistory ?? [],
         wallCount: design.recognition.walls.map(normalizeRecognitionWall).filter((wall) => wall.status !== 'deleted').length,
         confidence: design.recognition.confidence ?? '中',
